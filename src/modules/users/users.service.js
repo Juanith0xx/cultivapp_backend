@@ -10,13 +10,14 @@ const hashPassword = async (password) => {
 }
 
 /* =========================================================
-   GET USER BY ID
+   GET USER BY ID (SOFT DELETE SAFE)
 ========================================================= */
 export const getUserById = async (id) => {
   const result = await db.query(
     `SELECT id, company_id, role, is_active
      FROM public.users
-     WHERE id = $1`,
+     WHERE id = $1
+       AND deleted_at IS NULL`,
     [id]
   )
 
@@ -43,7 +44,9 @@ export const createUser = async ({
   }
 
   const emailExists = await db.query(
-    `SELECT id FROM public.users WHERE LOWER(email) = LOWER($1)`,
+    `SELECT id FROM public.users 
+     WHERE LOWER(email) = LOWER($1)
+       AND deleted_at IS NULL`,
     [email]
   )
 
@@ -54,7 +57,8 @@ export const createUser = async ({
   const companyResult = await db.query(
     `SELECT max_supervisors, max_users, max_view, is_active
      FROM public.companies
-     WHERE id = $1`,
+     WHERE id = $1
+       AND deleted_at IS NULL`,
     [company_id]
   )
 
@@ -73,7 +77,8 @@ export const createUser = async ({
      FROM public.users
      WHERE company_id = $1
        AND role = $2
-       AND is_active = true`,
+       AND is_active = true
+       AND deleted_at IS NULL`,
     [company_id, role]
   )
 
@@ -105,7 +110,7 @@ export const createUser = async ({
 }
 
 /* =========================================================
-   UPDATE USER
+   UPDATE USER (SOFT DELETE SAFE)
 ========================================================= */
 export const updateUser = async (id, { first_name, email, role }) => {
 
@@ -119,19 +124,6 @@ export const updateUser = async (id, { first_name, email, role }) => {
     throw new Error("No se puede editar ROOT")
   }
 
-  if (email) {
-    const emailExists = await db.query(
-      `SELECT id FROM public.users
-       WHERE LOWER(email) = LOWER($1)
-       AND id != $2`,
-      [email, id]
-    )
-
-    if (emailExists.rows.length > 0) {
-      throw new Error("El correo ya está registrado")
-    }
-  }
-
   const result = await db.query(
     `UPDATE public.users
      SET
@@ -139,6 +131,7 @@ export const updateUser = async (id, { first_name, email, role }) => {
        email = COALESCE($2, email),
        role = COALESCE($3, role)
      WHERE id = $4
+       AND deleted_at IS NULL
      RETURNING id, first_name, email, role, is_active, company_id`,
     [
       first_name || null,
@@ -152,7 +145,7 @@ export const updateUser = async (id, { first_name, email, role }) => {
 }
 
 /* =========================================================
-   TOGGLE USER
+   TOGGLE USER (SOFT DELETE SAFE)
 ========================================================= */
 export const toggleUser = async (id) => {
 
@@ -170,6 +163,7 @@ export const toggleUser = async (id) => {
     `UPDATE public.users
      SET is_active = NOT is_active
      WHERE id = $1
+       AND deleted_at IS NULL
      RETURNING id, first_name, email, role, is_active, company_id`,
     [id]
   )
@@ -178,7 +172,7 @@ export const toggleUser = async (id) => {
 }
 
 /* =========================================================
-   DELETE USER
+   SOFT DELETE USER
 ========================================================= */
 export const deleteUser = async (id) => {
 
@@ -193,7 +187,9 @@ export const deleteUser = async (id) => {
   }
 
   await db.query(
-    `DELETE FROM public.users
+    `UPDATE public.users
+     SET deleted_at = NOW(),
+         session_id = NULL
      WHERE id = $1`,
     [id]
   )
@@ -202,61 +198,7 @@ export const deleteUser = async (id) => {
 }
 
 /* =========================================================
-   RESET PASSWORD (MULTI-TENANT PRO)
-========================================================= */
-export const resetPassword = async (id, loggedUser) => {
-
-  const result = await db.query(
-    `SELECT id, role, company_id
-     FROM public.users
-     WHERE id = $1`,
-    [id]
-  )
-
-  const targetUser = result.rows[0]
-
-  if (!targetUser) {
-    throw new Error("Usuario no encontrado")
-  }
-
-  if (targetUser.role === "ROOT") {
-    throw new Error("No permitido resetear usuario ROOT")
-  }
-
-  if (loggedUser.role === "ADMIN_CLIENTE") {
-
-    if (targetUser.company_id !== loggedUser.company_id) {
-      throw new Error("No autorizado para esta empresa")
-    }
-
-    if (targetUser.role === "ADMIN_CLIENTE") {
-      throw new Error("No autorizado para resetear este perfil")
-    }
-  }
-
-  const tempPassword = crypto
-    .randomBytes(6)
-    .toString("base64url")
-
-  const hashedPassword = await hashPassword(tempPassword)
-
-  await db.query(
-    `UPDATE public.users
-     SET password_hash = $1,
-         must_change_password = true,
-         session_id = NULL
-     WHERE id = $2`,
-    [hashedPassword, id]
-  )
-
-  return {
-    message: "Contraseña restablecida correctamente",
-    temporaryPassword: tempPassword
-  }
-}
-
-/* =========================================================
-   GET USERS (WITH COMPANY NAME)
+   GET USERS (FILTERED GLOBAL)
 ========================================================= */
 export const getUsers = async (role, company_id) => {
 
@@ -272,7 +214,7 @@ export const getUsers = async (role, company_id) => {
     FROM public.users u
     LEFT JOIN public.companies c 
       ON u.company_id = c.id
-    WHERE 1=1
+    WHERE u.deleted_at IS NULL
   `
 
   const values = []
@@ -294,14 +236,15 @@ export const getUsers = async (role, company_id) => {
 }
 
 /* =========================================================
-   COMPANY STATS
+   COMPANY STATS (SOFT DELETE SAFE)
 ========================================================= */
 export const getCompanyStats = async (company_id) => {
 
   const company = await db.query(
     `SELECT max_supervisors, max_users, max_view
      FROM public.companies
-     WHERE id = $1`,
+     WHERE id = $1
+       AND deleted_at IS NULL`,
     [company_id]
   )
 
@@ -316,6 +259,7 @@ export const getCompanyStats = async (company_id) => {
      FROM public.users
      WHERE company_id = $1
        AND is_active = true
+       AND deleted_at IS NULL
      GROUP BY role`,
     [company_id]
   )

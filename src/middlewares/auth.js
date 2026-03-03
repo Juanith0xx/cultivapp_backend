@@ -15,9 +15,13 @@ const authMiddleware = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
-    // 🔎 Verificar sesión activa en base de datos
+    // 🔎 Validar usuario + sesión + soft delete
     const result = await pool.query(
-      `SELECT session_id FROM users WHERE id = $1`,
+      `
+      SELECT session_id, is_active, deleted_at
+      FROM users
+      WHERE id = $1
+      `,
       [decoded.id]
     )
 
@@ -25,9 +29,20 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ message: "Usuario no existe" })
     }
 
-    const dbSessionId = result.rows[0].session_id
+    const user = result.rows[0]
 
-    if (!dbSessionId || dbSessionId !== decoded.session_id) {
+    // 🔥 Validar soft delete
+    if (user.deleted_at) {
+      return res.status(401).json({ message: "Usuario eliminado" })
+    }
+
+    // 🔥 Validar estado activo
+    if (!user.is_active) {
+      return res.status(401).json({ message: "Cuenta deshabilitada" })
+    }
+
+    // 🔥 Validar sesión activa
+    if (!user.session_id || user.session_id !== decoded.session_id) {
       return res.status(401).json({
         message: "Sesión cerrada por inicio en otro dispositivo"
       })

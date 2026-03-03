@@ -2,7 +2,7 @@ import db from "../../database/db.js"
 import bcrypt from "bcryptjs"
 
 /* ===============================
-   OBTENER EMPRESAS
+   OBTENER EMPRESAS (SOFT SAFE)
 =============================== */
 export const getCompanies = async () => {
 
@@ -10,7 +10,8 @@ export const getCompanies = async () => {
     SELECT id, rut, name, address,
            max_supervisors, max_users, max_view,
            is_active, created_at
-    FROM companies
+    FROM public.companies
+    WHERE deleted_at IS NULL
     ORDER BY created_at DESC
   `)
 
@@ -39,9 +40,14 @@ export const createCompanyWithAdmin = async ({
   try {
     await client.query("BEGIN")
 
-    // Validar RUT
+    /* ===============================
+       VALIDAR RUT (SOFT SAFE)
+    =============================== */
     const rutExists = await client.query(
-      `SELECT id FROM companies WHERE rut = $1`,
+      `SELECT id 
+       FROM public.companies 
+       WHERE rut = $1
+         AND deleted_at IS NULL`,
       [rut]
     )
 
@@ -49,9 +55,14 @@ export const createCompanyWithAdmin = async ({
       throw new Error("El RUT ya está registrado")
     }
 
-    // Validar email admin
+    /* ===============================
+       VALIDAR EMAIL ADMIN (SOFT SAFE)
+    =============================== */
     const emailExists = await client.query(
-      `SELECT id FROM users WHERE email = $1`,
+      `SELECT id 
+       FROM public.users 
+       WHERE LOWER(email) = LOWER($1)
+         AND deleted_at IS NULL`,
       [admin_email]
     )
 
@@ -59,10 +70,12 @@ export const createCompanyWithAdmin = async ({
       throw new Error("El correo del administrador ya existe")
     }
 
-    // Crear empresa
+    /* ===============================
+       CREAR EMPRESA
+    =============================== */
     const companyResult = await client.query(
       `
-      INSERT INTO companies (
+      INSERT INTO public.companies (
         rut,
         name,
         address,
@@ -74,9 +87,9 @@ export const createCompanyWithAdmin = async ({
       RETURNING id
       `,
       [
-        rut,
-        name,
-        address,
+        rut.trim(),
+        name.trim(),
+        address.trim(),
         max_supervisors || 0,
         max_users || 0,
         max_view || 0
@@ -85,12 +98,14 @@ export const createCompanyWithAdmin = async ({
 
     const company_id = companyResult.rows[0].id
 
-    // Crear admin cliente
-    const hashedPassword = await bcrypt.hash(admin_password, 10)
+    /* ===============================
+       CREAR ADMIN CLIENTE
+    =============================== */
+    const hashedPassword = await bcrypt.hash(admin_password.trim(), 10)
 
     await client.query(
       `
-      INSERT INTO users (
+      INSERT INTO public.users (
         company_id,
         first_name,
         email,
@@ -104,11 +119,11 @@ export const createCompanyWithAdmin = async ({
       `,
       [
         company_id,
-        admin_name,
-        admin_email,
+        admin_name.trim(),
+        admin_email.trim().toLowerCase(),
         hashedPassword,
-        admin_phone || null,
-        admin_position || null
+        admin_phone ? admin_phone.trim() : null,
+        admin_position ? admin_position.trim() : null
       ]
     )
 
@@ -122,4 +137,26 @@ export const createCompanyWithAdmin = async ({
   } finally {
     client.release()
   }
+}
+
+/* ===============================
+   SOFT DELETE COMPANY
+=============================== */
+export const deleteCompany = async (id) => {
+
+  const result = await db.query(
+    `UPDATE public.companies
+     SET deleted_at = NOW(),
+         is_active = false
+     WHERE id = $1
+       AND deleted_at IS NULL
+     RETURNING id`,
+    [id]
+  )
+
+  if (result.rows.length === 0) {
+    throw new Error("Empresa no encontrada")
+  }
+
+  return { message: "Empresa eliminada correctamente" }
 }

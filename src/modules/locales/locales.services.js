@@ -2,15 +2,16 @@ import db from "../../database/db.js"
 import xlsx from "xlsx"
 
 /* =========================================
-   OBTENER LOCALES
+   OBTENER LOCALES (SOFT DELETE SAFE)
 ========================================= */
 export const getLocales = async (company_id) => {
 
   let query = `
     SELECT *
-    FROM locales
-    WHERE 1=1
+    FROM public.locales
+    WHERE deleted_at IS NULL
   `
+
   let values = []
 
   if (company_id) {
@@ -25,11 +26,14 @@ export const getLocales = async (company_id) => {
 }
 
 /* =========================================
-   OBTENER LOCAL POR ID (para validaciones)
+   OBTENER LOCAL POR ID (SOFT DELETE SAFE)
 ========================================= */
 export const getLocalById = async (id) => {
   const result = await db.query(
-    `SELECT * FROM locales WHERE id = $1`,
+    `SELECT *
+     FROM public.locales
+     WHERE id = $1
+       AND deleted_at IS NULL`,
     [id]
   )
 
@@ -51,7 +55,6 @@ export const createLocal = async (data) => {
     telefono
   } = data
 
-  // 🔒 Validación fuerte
   if (!company_id) {
     throw new Error("Empresa requerida")
   }
@@ -60,9 +63,22 @@ export const createLocal = async (data) => {
     throw new Error("Faltan campos obligatorios")
   }
 
+  // Validar que empresa exista y no esté eliminada
+  const company = await db.query(
+    `SELECT id 
+     FROM public.companies
+     WHERE id = $1
+       AND deleted_at IS NULL`,
+    [company_id]
+  )
+
+  if (company.rows.length === 0) {
+    throw new Error("Empresa no válida")
+  }
+
   const result = await db.query(
     `
-    INSERT INTO locales (
+    INSERT INTO public.locales (
       company_id,
       cadena,
       region,
@@ -89,47 +105,56 @@ export const createLocal = async (data) => {
 }
 
 /* =========================================
-   TOGGLE LOCAL
+   TOGGLE LOCAL (SOFT DELETE SAFE)
 ========================================= */
 export const toggleLocal = async (id) => {
 
+  const existing = await getLocalById(id)
+
+  if (!existing) {
+    throw new Error("Local no encontrado")
+  }
+
   const result = await db.query(
     `
-    UPDATE locales
+    UPDATE public.locales
     SET is_active = NOT is_active,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
+      AND deleted_at IS NULL
     RETURNING *
     `,
     [id]
   )
 
-  if (result.rows.length === 0) {
-    throw new Error("Local no encontrado")
-  }
-
   return result.rows[0]
 }
 
 /* =========================================
-   ELIMINAR LOCAL
+   SOFT DELETE LOCAL
 ========================================= */
 export const deleteLocal = async (id) => {
 
-  const result = await db.query(
-    `DELETE FROM locales WHERE id = $1 RETURNING id`,
-    [id]
-  )
+  const existing = await getLocalById(id)
 
-  if (result.rows.length === 0) {
+  if (!existing) {
     throw new Error("Local no encontrado")
   }
+
+  await db.query(
+    `
+    UPDATE public.locales
+    SET deleted_at = NOW()
+    WHERE id = $1
+    `,
+    [id]
+  )
 
   return true
 }
 
 /* =========================================
-   CARGA MASIVA DESDE EXCEL
+   CARGA MASIVA DESDE EXCEL (SOFT SAFE)
 ========================================= */
 export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
@@ -137,10 +162,21 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
     throw new Error("Empresa requerida")
   }
 
+  const company = await db.query(
+    `SELECT id 
+     FROM public.companies
+     WHERE id = $1
+       AND deleted_at IS NULL`,
+    [company_id]
+  )
+
+  if (company.rows.length === 0) {
+    throw new Error("Empresa no válida")
+  }
+
   const workbook = xlsx.read(fileBuffer, { type: "buffer" })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
-
   const rows = xlsx.utils.sheet_to_json(sheet)
 
   if (!rows.length) {
@@ -178,7 +214,7 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
       await client.query(
         `
-        INSERT INTO locales (
+        INSERT INTO public.locales (
           company_id,
           cadena,
           region,

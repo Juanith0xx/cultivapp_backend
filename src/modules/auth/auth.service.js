@@ -2,9 +2,10 @@ import pool from "../../database/db.js"
 import bcrypt from "bcryptjs"
 import generateToken from "../../utils/generateToken.js"
 import crypto from "crypto"
+import { logAction } from "../../utils/audit.js"
 
 /* =========================================
-   LOGIN USER (PRO VERSION - STABLE)
+   LOGIN USER (PRO VERSION - AUDITED)
 ========================================= */
 export const loginUser = async ({ email, password }) => {
 
@@ -60,6 +61,9 @@ export const loginUser = async ({ email, password }) => {
     [sessionId, user.id]
   )
 
+  // ✅ AUDITORÍA LOGIN
+  await logAction(user.id, "LOGIN")
+
   const token = generateToken({
     id: user.id,
     role: user.role,
@@ -95,11 +99,15 @@ export const updatePassword = async (userId, newPassword) => {
     `
     UPDATE public.users
     SET password_hash = $1,
-        must_change_password = false
+        must_change_password = false,
+        session_id = NULL
     WHERE id = $2
     `,
     [hashedPassword, userId]
   )
+
+  // ✅ AUDITORÍA CAMBIO CONTRASEÑA
+  await logAction(userId, "CHANGE_PASSWORD")
 
   return true
 }
@@ -131,6 +139,7 @@ export const createPasswordResetToken = async (email) => {
 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
+  // Invalidar tokens anteriores
   await pool.query(
     `UPDATE public.password_resets
      SET used = true
@@ -143,6 +152,9 @@ export const createPasswordResetToken = async (email) => {
      VALUES ($1, $2, $3)`,
     [user.id, tokenHash, expiresAt]
   )
+
+  // ✅ AUDITORÍA SOLICITUD RESET
+  await logAction(user.id, "REQUEST_PASSWORD_RESET")
 
   return { token }
 }
@@ -203,6 +215,9 @@ export const resetPasswordWithToken = async (token, newPassword) => {
     `,
     [resetRecord.id]
   )
+
+  // ✅ AUDITORÍA RESET COMPLETADO
+  await logAction(resetRecord.user_id, "RESET_PASSWORD")
 
   return true
 }
