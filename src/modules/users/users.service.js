@@ -43,7 +43,7 @@ export const createUser = async ({
   }
 
   const emailExists = await db.query(
-    `SELECT id FROM public.users WHERE email = $1`,
+    `SELECT id FROM public.users WHERE LOWER(email) = LOWER($1)`,
     [email]
   )
 
@@ -95,8 +95,8 @@ export const createUser = async ({
 
   const result = await db.query(
     `INSERT INTO public.users
-     (company_id, first_name, email, password_hash, role, is_active)
-     VALUES ($1,$2,$3,$4,$5,true)
+     (company_id, first_name, email, password_hash, role, is_active, must_change_password)
+     VALUES ($1,$2,$3,$4,$5,true,false)
      RETURNING id, first_name, email, role, is_active, company_id`,
     [company_id, first_name, email, hashedPassword, role]
   )
@@ -121,7 +121,9 @@ export const updateUser = async (id, { first_name, email, role }) => {
 
   if (email) {
     const emailExists = await db.query(
-      `SELECT id FROM public.users WHERE email = $1 AND id != $2`,
+      `SELECT id FROM public.users
+       WHERE LOWER(email) = LOWER($1)
+       AND id != $2`,
       [email, id]
     )
 
@@ -154,6 +156,16 @@ export const updateUser = async (id, { first_name, email, role }) => {
 ========================================================= */
 export const toggleUser = async (id) => {
 
+  const user = await getUserById(id)
+
+  if (!user) {
+    throw new Error("Usuario no encontrado")
+  }
+
+  if (user.role === "ROOT") {
+    throw new Error("No se puede modificar ROOT")
+  }
+
   const result = await db.query(
     `UPDATE public.users
      SET is_active = NOT is_active
@@ -161,10 +173,6 @@ export const toggleUser = async (id) => {
      RETURNING id, first_name, email, role, is_active, company_id`,
     [id]
   )
-
-  if (result.rows.length === 0) {
-    throw new Error("Usuario no encontrado")
-  }
 
   return result.rows[0]
 }
@@ -174,25 +182,6 @@ export const toggleUser = async (id) => {
 ========================================================= */
 export const deleteUser = async (id) => {
 
-  const result = await db.query(
-    `DELETE FROM public.users
-     WHERE id = $1
-     RETURNING id`,
-    [id]
-  )
-
-  if (result.rows.length === 0) {
-    throw new Error("Usuario no encontrado")
-  }
-
-  return { message: "Usuario eliminado correctamente" }
-}
-
-/* =========================================================
-   RESET PASSWORD
-========================================================= */
-export const resetPassword = async (id) => {
-
   const user = await getUserById(id)
 
   if (!user) {
@@ -200,16 +189,62 @@ export const resetPassword = async (id) => {
   }
 
   if (user.role === "ROOT") {
-    throw new Error("No permitido")
+    throw new Error("No se puede eliminar ROOT")
   }
 
-  const tempPassword = crypto.randomBytes(6).toString("base64url")
+  await db.query(
+    `DELETE FROM public.users
+     WHERE id = $1`,
+    [id]
+  )
+
+  return { message: "Usuario eliminado correctamente" }
+}
+
+/* =========================================================
+   RESET PASSWORD (MULTI-TENANT PRO)
+========================================================= */
+export const resetPassword = async (id, loggedUser) => {
+
+  const result = await db.query(
+    `SELECT id, role, company_id
+     FROM public.users
+     WHERE id = $1`,
+    [id]
+  )
+
+  const targetUser = result.rows[0]
+
+  if (!targetUser) {
+    throw new Error("Usuario no encontrado")
+  }
+
+  if (targetUser.role === "ROOT") {
+    throw new Error("No permitido resetear usuario ROOT")
+  }
+
+  if (loggedUser.role === "ADMIN_CLIENTE") {
+
+    if (targetUser.company_id !== loggedUser.company_id) {
+      throw new Error("No autorizado para esta empresa")
+    }
+
+    if (targetUser.role === "ADMIN_CLIENTE") {
+      throw new Error("No autorizado para resetear este perfil")
+    }
+  }
+
+  const tempPassword = crypto
+    .randomBytes(6)
+    .toString("base64url")
+
   const hashedPassword = await hashPassword(tempPassword)
 
   await db.query(
     `UPDATE public.users
      SET password_hash = $1,
-      must_change_password = true
+         must_change_password = true,
+         session_id = NULL
      WHERE id = $2`,
     [hashedPassword, id]
   )
@@ -269,6 +304,10 @@ export const getCompanyStats = async (company_id) => {
      WHERE id = $1`,
     [company_id]
   )
+
+  if (company.rows.length === 0) {
+    throw new Error("Empresa no encontrada")
+  }
 
   const limits = company.rows[0]
 

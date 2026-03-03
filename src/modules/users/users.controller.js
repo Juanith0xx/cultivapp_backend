@@ -5,14 +5,15 @@ import * as userService from "./users.service.js"
 ========================================= */
 export const createUser = async (req, res) => {
   try {
-    const { role, company_id } = req.user
+
+    const loggedUser = req.user
     let payload = { ...req.body }
 
     // 🔒 ADMIN_CLIENTE solo crea en su empresa
-    if (role === "ADMIN_CLIENTE") {
-      payload.company_id = company_id
+    if (loggedUser.role === "ADMIN_CLIENTE") {
 
-      // 🚫 No puede crear ROOT ni ADMIN_CLIENTE
+      payload.company_id = loggedUser.company_id
+
       if (
         payload.role === "ROOT" ||
         payload.role === "ADMIN_CLIENTE"
@@ -38,12 +39,13 @@ export const createUser = async (req, res) => {
 ========================================= */
 export const getUsers = async (req, res) => {
   try {
-    const { role, company_id } = req.user
+
+    const loggedUser = req.user
     const { role: queryRole, company_id: queryCompany } = req.query
 
     const users =
-      role === "ADMIN_CLIENTE"
-        ? await userService.getUsers(queryRole, company_id)
+      loggedUser.role === "ADMIN_CLIENTE"
+        ? await userService.getUsers(queryRole, loggedUser.company_id)
         : await userService.getUsers(queryRole, queryCompany)
 
     res.json(users)
@@ -60,8 +62,9 @@ export const getUsers = async (req, res) => {
 ========================================= */
 export const updateUser = async (req, res) => {
   try {
+
     const { id } = req.params
-    const { role, company_id } = req.user
+    const loggedUser = req.user
 
     const existingUser = await userService.getUserById(id)
 
@@ -69,15 +72,28 @@ export const updateUser = async (req, res) => {
       return res.status(404).json({ message: "Usuario no encontrado" })
     }
 
-    // 🔒 Multi-tenant
-    if (role === "ADMIN_CLIENTE" && existingUser.company_id !== company_id) {
-      return res.status(403).json({ message: "Sin permisos sobre este usuario" })
+    // 🚫 Nunca editar ROOT
+    if (existingUser.role === "ROOT") {
+      return res.status(403).json({
+        message: "No se puede modificar usuario ROOT"
+      })
     }
 
-    // 🚫 ADMIN_CLIENTE no puede escalar roles
+    // 🔒 Multi-tenant
     if (
-      role === "ADMIN_CLIENTE" &&
-      (req.body.role === "ROOT" || req.body.role === "ADMIN_CLIENTE")
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      existingUser.company_id !== loggedUser.company_id
+    ) {
+      return res.status(403).json({
+        message: "Sin permisos sobre este usuario"
+      })
+    }
+
+    // 🚫 ADMIN_CLIENTE no puede escalar privilegios
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      (req.body.role === "ROOT" ||
+        req.body.role === "ADMIN_CLIENTE")
     ) {
       return res.status(403).json({
         message: "No puedes asignar ese perfil"
@@ -99,8 +115,9 @@ export const updateUser = async (req, res) => {
 ========================================= */
 export const toggleUser = async (req, res) => {
   try {
+
     const { id } = req.params
-    const { role, company_id } = req.user
+    const loggedUser = req.user
 
     const user = await userService.getUserById(id)
 
@@ -108,8 +125,19 @@ export const toggleUser = async (req, res) => {
       return res.status(404).json({ message: "Usuario no encontrado" })
     }
 
-    if (role === "ADMIN_CLIENTE" && user.company_id !== company_id) {
-      return res.status(403).json({ message: "Sin permisos" })
+    if (user.role === "ROOT") {
+      return res.status(403).json({
+        message: "No se puede modificar usuario ROOT"
+      })
+    }
+
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      user.company_id !== loggedUser.company_id
+    ) {
+      return res.status(403).json({
+        message: "Sin permisos"
+      })
     }
 
     const updated = await userService.toggleUser(id)
@@ -127,17 +155,48 @@ export const toggleUser = async (req, res) => {
 ========================================= */
 export const deleteUser = async (req, res) => {
   try {
+
     const { id } = req.params
-    const { role, company_id } = req.user
+    const loggedUser = req.user
 
-    const user = await userService.getUserById(id)
+    const targetUser = await userService.getUserById(id)
 
-    if (!user) {
+    if (!targetUser) {
       return res.status(404).json({ message: "Usuario no encontrado" })
     }
 
-    if (role === "ADMIN_CLIENTE" && user.company_id !== company_id) {
-      return res.status(403).json({ message: "Sin permisos" })
+    // 🚫 Nunca eliminar ROOT
+    if (targetUser.role === "ROOT") {
+      return res.status(403).json({
+        message: "No permitido eliminar usuario ROOT"
+      })
+    }
+
+    // 🚫 ADMIN_CLIENTE no puede eliminar otro ADMIN_CLIENTE
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      targetUser.role === "ADMIN_CLIENTE"
+    ) {
+      return res.status(403).json({
+        message: "No puedes eliminar otro administrador"
+      })
+    }
+
+    // 🚫 No puede eliminarse a sí mismo
+    if (loggedUser.id === targetUser.id) {
+      return res.status(403).json({
+        message: "No puedes eliminar tu propia cuenta"
+      })
+    }
+
+    // 🔒 Multi-tenant
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      targetUser.company_id !== loggedUser.company_id
+    ) {
+      return res.status(403).json({
+        message: "No tienes permisos sobre este usuario"
+      })
     }
 
     const result = await userService.deleteUser(id)
@@ -155,23 +214,36 @@ export const deleteUser = async (req, res) => {
 ========================================= */
 export const resetPassword = async (req, res) => {
   try {
+
     const { id } = req.params
-    const { role, company_id } = req.user
+    const loggedUser = req.user
 
-    const user = await userService.getUserById(id)
+    const targetUser = await userService.getUserById(id)
 
-    if (!user) {
-      return res.status(404).json({ message: "Usuario no encontrado" })
+    if (!targetUser) {
+      return res.status(404).json({
+        message: "Usuario no encontrado"
+      })
+    }
+
+    // 🚫 Nunca resetear ROOT
+    if (targetUser.role === "ROOT") {
+      return res.status(403).json({
+        message: "No permitido resetear usuario ROOT"
+      })
     }
 
     // 🔒 Multi-tenant
-    if (role === "ADMIN_CLIENTE" && user.company_id !== company_id) {
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      targetUser.company_id !== loggedUser.company_id
+    ) {
       return res.status(403).json({
         message: "No tienes permisos sobre este usuario"
       })
     }
 
-    const result = await userService.resetPassword(id)
+    const result = await userService.resetPassword(id, loggedUser)
     res.json(result)
 
   } catch (error) {
@@ -186,11 +258,14 @@ export const resetPassword = async (req, res) => {
 ========================================= */
 export const getCompanyStats = async (req, res) => {
   try {
-    const { companyId } = req.params
-    const { role, company_id } = req.user
 
-    // 🔒 ADMIN_CLIENTE solo puede ver su empresa
-    if (role === "ADMIN_CLIENTE" && companyId !== company_id) {
+    const { companyId } = req.params
+    const loggedUser = req.user
+
+    if (
+      loggedUser.role === "ADMIN_CLIENTE" &&
+      companyId !== loggedUser.company_id
+    ) {
       return res.status(403).json({
         message: "Sin permisos para esta empresa"
       })

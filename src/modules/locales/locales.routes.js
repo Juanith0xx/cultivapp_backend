@@ -13,22 +13,38 @@ import {
 
 const router = Router()
 
-/* =========================================
-   ROOT - CONTROL TOTAL LOCALES
-========================================= */
+router.get(
+  "/",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  getLocales
+)
 
-router.get("/", auth, roleGuard("ROOT"), getLocales)
+router.post(
+  "/",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  createLocal
+)
 
-router.post("/", auth, roleGuard("ROOT"), createLocal)
+router.patch(
+  "/:id/toggle",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  toggleLocal
+)
 
-router.patch("/:id/toggle", auth, roleGuard("ROOT"), toggleLocal)
-
-router.delete("/:id", auth, roleGuard("ROOT"), deleteLocal)
+router.delete(
+  "/:id",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  deleteLocal
+)
 
 router.post(
   "/upload",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   upload.single("file"),
   uploadLocales
 )

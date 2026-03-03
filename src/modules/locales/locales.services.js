@@ -25,19 +25,38 @@ export const getLocales = async (company_id) => {
 }
 
 /* =========================================
+   OBTENER LOCAL POR ID (para validaciones)
+========================================= */
+export const getLocalById = async (id) => {
+  const result = await db.query(
+    `SELECT * FROM locales WHERE id = $1`,
+    [id]
+  )
+
+  return result.rows[0]
+}
+
+/* =========================================
    CREAR LOCAL MANUAL
 ========================================= */
-export const createLocal = async ({
-  company_id,
-  cadena,
-  region,
-  comuna,
-  direccion,
-  gerente,
-  telefono
-}) => {
+export const createLocal = async (data) => {
 
-  if (!company_id || !cadena || !region || !comuna || !direccion) {
+  const {
+    company_id,
+    cadena,
+    region,
+    comuna,
+    direccion,
+    gerente,
+    telefono
+  } = data
+
+  // 🔒 Validación fuerte
+  if (!company_id) {
+    throw new Error("Empresa requerida")
+  }
+
+  if (!cadena || !region || !comuna || !direccion) {
     throw new Error("Faltan campos obligatorios")
   }
 
@@ -57,12 +76,12 @@ export const createLocal = async ({
     `,
     [
       company_id,
-      cadena,
-      region,
-      comuna,
-      direccion,
-      gerente || null,
-      telefono || null
+      cadena.trim(),
+      region.trim(),
+      comuna.trim(),
+      direccion.trim(),
+      gerente ? gerente.trim() : null,
+      telefono ? telefono.trim() : null
     ]
   )
 
@@ -105,6 +124,8 @@ export const deleteLocal = async (id) => {
   if (result.rows.length === 0) {
     throw new Error("Local no encontrado")
   }
+
+  return true
 }
 
 /* =========================================
@@ -170,12 +191,12 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         `,
         [
           company_id,
-          cadena,
-          region,
-          comuna,
-          direccion,
-          gerente || null,
-          telefono || null
+          cadena.trim(),
+          region.trim(),
+          comuna.trim(),
+          direccion.trim(),
+          gerente ? gerente.trim() : null,
+          telefono ? telefono.trim() : null
         ]
       )
 
