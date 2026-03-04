@@ -3,17 +3,29 @@ import {
   login, 
   changePassword,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  testEmail 
 } from "./auth.controller.js"
+
 import auth from "../../middlewares/auth.js"
 
 const router = Router()
 
+/* ===============================
+   AUTH
+=============================== */
 router.post("/login", login)
 router.put("/change-password", auth, changePassword)
 
-// NUEVAS RUTAS SaaS
+/* ===============================
+   PASSWORD RESET SaaS
+=============================== */
 router.post("/forgot-password", forgotPassword)
 router.post("/reset-password", resetPassword)
+
+/* ===============================
+   TEST EMAIL (TEMPORAL)
+=============================== */
+router.get("/test-email", testEmail)
 
 export default router
