@@ -14,7 +14,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173", // desarrollo
-      "https://tu-frontend.vercel.app" // producción
+      "https://cultivapp-frontend.vercel.app/" // producción
     ],
     credentials: true
   })
