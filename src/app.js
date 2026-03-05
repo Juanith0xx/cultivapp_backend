@@ -13,8 +13,8 @@ const app = express()
 app.use(
   cors({
     origin: [
-      "http://localhost:5173", // desarrollo
-      "https://cultivapp-frontend.vercel.app/" // producción
+      "http://localhost:5173", // desarrollo local
+      "https://cultivapp-frontend.vercel.app" // producción vercel
     ],
     credentials: true
   })
