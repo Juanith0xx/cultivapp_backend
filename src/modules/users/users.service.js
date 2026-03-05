@@ -10,9 +10,21 @@ const hashPassword = async (password) => {
 }
 
 /* =========================================================
+   HELPER: GENERATE TEMP PASSWORD
+========================================================= */
+const generateTempPassword = () => {
+  return crypto
+    .randomBytes(6)
+    .toString("base64")
+    .replace(/[+/=]/g, "")
+    .slice(0, 10)
+}
+
+/* =========================================================
    GET USER BY ID (SOFT DELETE SAFE)
 ========================================================= */
 export const getUserById = async (id) => {
+
   const result = await db.query(
     `SELECT id, company_id, role, is_active
      FROM public.users
@@ -110,7 +122,7 @@ export const createUser = async ({
 }
 
 /* =========================================================
-   UPDATE USER (SOFT DELETE SAFE)
+   UPDATE USER
 ========================================================= */
 export const updateUser = async (id, { first_name, email, role }) => {
 
@@ -145,7 +157,7 @@ export const updateUser = async (id, { first_name, email, role }) => {
 }
 
 /* =========================================================
-   TOGGLE USER (SOFT DELETE SAFE)
+   TOGGLE USER
 ========================================================= */
 export const toggleUser = async (id) => {
 
@@ -198,7 +210,40 @@ export const deleteUser = async (id) => {
 }
 
 /* =========================================================
-   GET USERS (FILTERED GLOBAL)
+   RESET PASSWORD
+========================================================= */
+export const resetPassword = async (id) => {
+
+  const user = await getUserById(id)
+
+  if (!user) {
+    throw new Error("Usuario no encontrado")
+  }
+
+  if (user.role === "ROOT") {
+    throw new Error("No se puede resetear usuario ROOT")
+  }
+
+  const temporaryPassword = generateTempPassword()
+
+  const hashedPassword = await hashPassword(temporaryPassword)
+
+  await db.query(
+    `UPDATE public.users
+     SET password_hash = $1,
+         must_change_password = true
+     WHERE id = $2
+       AND deleted_at IS NULL`,
+    [hashedPassword, id]
+  )
+
+  return {
+    temporaryPassword
+  }
+}
+
+/* =========================================================
+   GET USERS
 ========================================================= */
 export const getUsers = async (role, company_id) => {
 
@@ -232,11 +277,12 @@ export const getUsers = async (role, company_id) => {
   query += ` ORDER BY u.created_at DESC`
 
   const result = await db.query(query, values)
+
   return result.rows
 }
 
 /* =========================================================
-   COMPANY STATS (SOFT DELETE SAFE)
+   COMPANY STATS
 ========================================================= */
 export const getCompanyStats = async (company_id) => {
 

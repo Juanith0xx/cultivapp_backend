@@ -9,9 +9,21 @@ import routesRoutes from "./modules/routes/routes.routes.js"
 
 const app = express()
 
-app.use(cors())
+/* CORS CONFIG */
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173", // desarrollo
+      "https://tu-frontend.vercel.app" // producción
+    ],
+    credentials: true
+  })
+)
+
+/* BODY PARSER */
 app.use(express.json())
 
+/* ROUTES */
 app.use("/api/auth", authRoutes)
 app.use("/api/companies", companiesRoutes)
 app.use("/api/users", usersRoutes)
