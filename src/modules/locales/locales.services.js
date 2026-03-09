@@ -1,5 +1,6 @@
 import db from "../../database/db.js"
 import xlsx from "xlsx"
+import geocodeAddress from "../../utils/geocodeAddress.js"
 
 /* =========================================
    HELPERS
@@ -11,7 +12,7 @@ const clean = (value) => {
 }
 
 /* =========================================
-   OBTENER LOCALES (SOFT DELETE SAFE)
+   OBTENER LOCALES
 ========================================= */
 export const getLocales = async (company_id) => {
 
@@ -36,7 +37,7 @@ export const getLocales = async (company_id) => {
 }
 
 /* =========================================
-   OBTENER LOCAL POR ID (SOFT DELETE SAFE)
+   OBTENER LOCAL POR ID
 ========================================= */
 export const getLocalById = async (id) => {
 
@@ -54,7 +55,7 @@ export const getLocalById = async (id) => {
 }
 
 /* =========================================
-   CREAR LOCAL MANUAL
+   CREAR LOCAL (CON GEOCODING)
 ========================================= */
 export const createLocal = async (data) => {
 
@@ -90,6 +91,15 @@ export const createLocal = async (data) => {
     throw new Error("Empresa no válida")
   }
 
+  /* MAPBOX GEOCODING */
+
+  const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
+
+  const coordinates = await geocodeAddress(fullAddress)
+
+  const lat = coordinates?.lat || null
+  const lng = coordinates?.lng || null
+
   const result = await db.query(
     `
     INSERT INTO public.locales (
@@ -99,9 +109,11 @@ export const createLocal = async (data) => {
       comuna,
       direccion,
       gerente,
-      telefono
+      telefono,
+      lat,
+      lng
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING *
     `,
     [
@@ -111,7 +123,9 @@ export const createLocal = async (data) => {
       clean(comuna),
       clean(direccion),
       clean(gerente),
-      clean(telefono)
+      clean(telefono),
+      lat,
+      lng
     ]
   )
 
@@ -142,6 +156,13 @@ export const updateLocal = async (id, data) => {
     throw new Error("Faltan campos obligatorios")
   }
 
+  const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
+
+  const coordinates = await geocodeAddress(fullAddress)
+
+  const lat = coordinates?.lat || null
+  const lng = coordinates?.lng || null
+
   const result = await db.query(
     `
     UPDATE public.locales
@@ -152,8 +173,10 @@ export const updateLocal = async (id, data) => {
       direccion = $4,
       gerente = $5,
       telefono = $6,
+      lat = $7,
+      lng = $8,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = $7
+    WHERE id = $9
       AND deleted_at IS NULL
     RETURNING *
     `,
@@ -164,6 +187,8 @@ export const updateLocal = async (id, data) => {
       clean(direccion),
       clean(gerente),
       clean(telefono),
+      lat,
+      lng,
       id
     ]
   )
@@ -199,7 +224,7 @@ export const toggleLocal = async (id) => {
 }
 
 /* =========================================
-   SOFT DELETE LOCAL
+   DELETE LOCAL
 ========================================= */
 export const deleteLocal = async (id) => {
 
@@ -222,26 +247,12 @@ export const deleteLocal = async (id) => {
 }
 
 /* =========================================
-   CARGA MASIVA EXCEL
+   CARGA MASIVA EXCEL + GEOCODING
 ========================================= */
 export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
   if (!company_id) {
     throw new Error("Empresa requerida")
-  }
-
-  const company = await db.query(
-    `
-    SELECT id
-    FROM public.companies
-    WHERE id = $1
-      AND deleted_at IS NULL
-    `,
-    [company_id]
-  )
-
-  if (company.rows.length === 0) {
-    throw new Error("Empresa no válida")
   }
 
   const workbook = xlsx.read(fileBuffer, { type: "buffer" })
@@ -286,6 +297,13 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         continue
       }
 
+      const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
+
+      const coordinates = await geocodeAddress(fullAddress)
+
+      const lat = coordinates?.lat || null
+      const lng = coordinates?.lng || null
+
       await client.query(
         `
         INSERT INTO public.locales (
@@ -295,9 +313,11 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
           comuna,
           direccion,
           gerente,
-          telefono
+          telefono,
+          lat,
+          lng
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
         `,
         [
           company_id,
@@ -306,7 +326,9 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
           clean(comuna),
           clean(direccion),
           clean(gerente),
-          clean(telefono)
+          clean(telefono),
+          lat,
+          lng
         ]
       )
 
