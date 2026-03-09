@@ -2,6 +2,15 @@ import db from "../../database/db.js"
 import xlsx from "xlsx"
 
 /* =========================================
+   HELPERS
+========================================= */
+
+const clean = (value) => {
+  if (value === undefined || value === null) return null
+  return String(value).trim()
+}
+
+/* =========================================
    OBTENER LOCALES (SOFT DELETE SAFE)
 ========================================= */
 export const getLocales = async (company_id) => {
@@ -22,6 +31,7 @@ export const getLocales = async (company_id) => {
   query += ` ORDER BY created_at DESC`
 
   const result = await db.query(query, values)
+
   return result.rows
 }
 
@@ -29,11 +39,14 @@ export const getLocales = async (company_id) => {
    OBTENER LOCAL POR ID (SOFT DELETE SAFE)
 ========================================= */
 export const getLocalById = async (id) => {
+
   const result = await db.query(
-    `SELECT *
-     FROM public.locales
-     WHERE id = $1
-       AND deleted_at IS NULL`,
+    `
+    SELECT *
+    FROM public.locales
+    WHERE id = $1
+      AND deleted_at IS NULL
+    `,
     [id]
   )
 
@@ -63,12 +76,13 @@ export const createLocal = async (data) => {
     throw new Error("Faltan campos obligatorios")
   }
 
-  // Validar que empresa exista y no esté eliminada
   const company = await db.query(
-    `SELECT id 
-     FROM public.companies
-     WHERE id = $1
-       AND deleted_at IS NULL`,
+    `
+    SELECT id
+    FROM public.companies
+    WHERE id = $1
+      AND deleted_at IS NULL
+    `,
     [company_id]
   )
 
@@ -92,12 +106,12 @@ export const createLocal = async (data) => {
     `,
     [
       company_id,
-      cadena.trim(),
-      region.trim(),
-      comuna.trim(),
-      direccion.trim(),
-      gerente ? gerente.trim() : null,
-      telefono ? telefono.trim() : null
+      clean(cadena),
+      clean(region),
+      clean(comuna),
+      clean(direccion),
+      clean(gerente),
+      clean(telefono)
     ]
   )
 
@@ -105,7 +119,60 @@ export const createLocal = async (data) => {
 }
 
 /* =========================================
-   TOGGLE LOCAL (SOFT DELETE SAFE)
+   ACTUALIZAR LOCAL
+========================================= */
+export const updateLocal = async (id, data) => {
+
+  const existing = await getLocalById(id)
+
+  if (!existing) {
+    throw new Error("Local no encontrado")
+  }
+
+  const {
+    cadena,
+    region,
+    comuna,
+    direccion,
+    gerente,
+    telefono
+  } = data
+
+  if (!cadena || !region || !comuna || !direccion) {
+    throw new Error("Faltan campos obligatorios")
+  }
+
+  const result = await db.query(
+    `
+    UPDATE public.locales
+    SET
+      cadena = $1,
+      region = $2,
+      comuna = $3,
+      direccion = $4,
+      gerente = $5,
+      telefono = $6,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $7
+      AND deleted_at IS NULL
+    RETURNING *
+    `,
+    [
+      clean(cadena),
+      clean(region),
+      clean(comuna),
+      clean(direccion),
+      clean(gerente),
+      clean(telefono),
+      id
+    ]
+  )
+
+  return result.rows[0]
+}
+
+/* =========================================
+   TOGGLE LOCAL
 ========================================= */
 export const toggleLocal = async (id) => {
 
@@ -118,8 +185,9 @@ export const toggleLocal = async (id) => {
   const result = await db.query(
     `
     UPDATE public.locales
-    SET is_active = NOT is_active,
-        updated_at = CURRENT_TIMESTAMP
+    SET
+      is_active = NOT is_active,
+      updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
       AND deleted_at IS NULL
     RETURNING *
@@ -154,7 +222,7 @@ export const deleteLocal = async (id) => {
 }
 
 /* =========================================
-   CARGA MASIVA DESDE EXCEL (SOFT SAFE)
+   CARGA MASIVA EXCEL
 ========================================= */
 export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
@@ -163,10 +231,12 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
   }
 
   const company = await db.query(
-    `SELECT id 
-     FROM public.companies
-     WHERE id = $1
-       AND deleted_at IS NULL`,
+    `
+    SELECT id
+    FROM public.companies
+    WHERE id = $1
+      AND deleted_at IS NULL
+    `,
     [company_id]
   )
 
@@ -177,6 +247,7 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
   const workbook = xlsx.read(fileBuffer, { type: "buffer" })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
+
   const rows = xlsx.utils.sheet_to_json(sheet)
 
   if (!rows.length) {
@@ -186,6 +257,7 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
   const client = await db.connect()
 
   try {
+
     await client.query("BEGIN")
 
     const insertedRows = []
@@ -205,10 +277,12 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
       } = rows[i]
 
       if (!cadena || !region || !comuna || !direccion) {
+
         errors.push({
           row: rowNumber,
           error: "Faltan campos obligatorios"
         })
+
         continue
       }
 
@@ -227,16 +301,17 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         `,
         [
           company_id,
-          cadena.trim(),
-          region.trim(),
-          comuna.trim(),
-          direccion.trim(),
-          gerente ? gerente.trim() : null,
-          telefono ? telefono.trim() : null
+          clean(cadena),
+          clean(region),
+          clean(comuna),
+          clean(direccion),
+          clean(gerente),
+          clean(telefono)
         ]
       )
 
       insertedRows.push(rowNumber)
+
     }
 
     await client.query("COMMIT")
@@ -247,9 +322,14 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
     }
 
   } catch (error) {
+
     await client.query("ROLLBACK")
     throw error
+
   } finally {
+
     client.release()
+
   }
+
 }

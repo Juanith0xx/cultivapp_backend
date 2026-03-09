@@ -18,8 +18,13 @@ export const getLocales = async (req, res) => {
     res.json(locales)
 
   } catch (error) {
+
     console.error("GET LOCALES ERROR:", error)
-    res.status(400).json({ message: error.message })
+
+    res.status(400).json({
+      message: error.message
+    })
+
   }
 }
 
@@ -41,8 +46,55 @@ export const createLocal = async (req, res) => {
     res.status(201).json(local)
 
   } catch (error) {
+
     console.error("CREATE LOCAL ERROR:", error)
-    res.status(400).json({ message: error.message })
+
+    res.status(400).json({
+      message: error.message
+    })
+
+  }
+}
+
+/* =========================================
+   ACTUALIZAR LOCAL
+========================================= */
+export const updateLocal = async (req, res) => {
+  try {
+
+    const local = await localeService.getLocalById(req.params.id)
+
+    if (!local) {
+      return res.status(404).json({
+        message: "Local no encontrado"
+      })
+    }
+
+    // 🔒 ADMIN_CLIENTE solo puede modificar su empresa
+    if (
+      req.user.role === "ADMIN_CLIENTE" &&
+      local.company_id !== req.user.company_id
+    ) {
+      return res.status(403).json({
+        message: "Sin permisos"
+      })
+    }
+
+    const updated = await localeService.updateLocal(
+      req.params.id,
+      req.body
+    )
+
+    res.json(updated)
+
+  } catch (error) {
+
+    console.error("UPDATE LOCAL ERROR:", error)
+
+    res.status(400).json({
+      message: error.message
+    })
+
   }
 }
 
@@ -55,7 +107,9 @@ export const toggleLocal = async (req, res) => {
     const local = await localeService.getLocalById(req.params.id)
 
     if (!local) {
-      return res.status(404).json({ message: "Local no encontrado" })
+      return res.status(404).json({
+        message: "Local no encontrado"
+      })
     }
 
     // 🔒 ADMIN_CLIENTE solo puede modificar su empresa
@@ -63,7 +117,9 @@ export const toggleLocal = async (req, res) => {
       req.user.role === "ADMIN_CLIENTE" &&
       local.company_id !== req.user.company_id
     ) {
-      return res.status(403).json({ message: "Sin permisos" })
+      return res.status(403).json({
+        message: "Sin permisos"
+      })
     }
 
     const updated = await localeService.toggleLocal(req.params.id)
@@ -71,8 +127,13 @@ export const toggleLocal = async (req, res) => {
     res.json(updated)
 
   } catch (error) {
+
     console.error("TOGGLE LOCAL ERROR:", error)
-    res.status(400).json({ message: error.message })
+
+    res.status(400).json({
+      message: error.message
+    })
+
   }
 }
 
@@ -85,23 +146,34 @@ export const deleteLocal = async (req, res) => {
     const local = await localeService.getLocalById(req.params.id)
 
     if (!local) {
-      return res.status(404).json({ message: "Local no encontrado" })
+      return res.status(404).json({
+        message: "Local no encontrado"
+      })
     }
 
     if (
       req.user.role === "ADMIN_CLIENTE" &&
       local.company_id !== req.user.company_id
     ) {
-      return res.status(403).json({ message: "Sin permisos" })
+      return res.status(403).json({
+        message: "Sin permisos"
+      })
     }
 
     await localeService.deleteLocal(req.params.id)
 
-    res.json({ message: "Local eliminado correctamente" })
+    res.json({
+      message: "Local eliminado correctamente"
+    })
 
   } catch (error) {
+
     console.error("DELETE LOCAL ERROR:", error)
-    res.status(400).json({ message: error.message })
+
+    res.status(400).json({
+      message: error.message
+    })
+
   }
 }
 
@@ -112,7 +184,9 @@ export const uploadLocales = async (req, res) => {
   try {
 
     if (!req.file) {
-      return res.status(400).json({ message: "Archivo requerido" })
+      return res.status(400).json({
+        message: "Archivo requerido"
+      })
     }
 
     let companyId = req.body.company_id
@@ -133,7 +207,12 @@ export const uploadLocales = async (req, res) => {
     })
 
   } catch (error) {
+
     console.error("UPLOAD LOCALES ERROR:", error)
-    res.status(400).json({ message: error.message })
+
+    res.status(400).json({
+      message: error.message
+    })
+
   }
 }
