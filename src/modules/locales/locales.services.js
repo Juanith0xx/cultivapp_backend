@@ -12,21 +12,21 @@ const clean = (value) => {
 }
 
 /* =========================================
-   OBTENER LOCALES
+   OBTENER LOCALES (DESDE LA VISTA)
 ========================================= */
+
 export const getLocales = async (company_id) => {
 
   let query = `
     SELECT *
-    FROM public.locales
-    WHERE deleted_at IS NULL
+    FROM public.active_locales
   `
 
   let values = []
 
   if (company_id) {
     values.push(company_id)
-    query += ` AND company_id = $${values.length}`
+    query += ` WHERE company_id = $${values.length}`
   }
 
   query += ` ORDER BY created_at DESC`
@@ -34,11 +34,13 @@ export const getLocales = async (company_id) => {
   const result = await db.query(query, values)
 
   return result.rows
+
 }
 
 /* =========================================
    OBTENER LOCAL POR ID
 ========================================= */
+
 export const getLocalById = async (id) => {
 
   const result = await db.query(
@@ -52,18 +54,20 @@ export const getLocalById = async (id) => {
   )
 
   return result.rows[0]
+
 }
 
 /* =========================================
-   CREAR LOCAL (CON GEOCODING)
+   CREAR LOCAL
 ========================================= */
+
 export const createLocal = async (data) => {
 
   const {
     company_id,
     cadena,
-    region,
-    comuna,
+    region_id,
+    comuna_id,
     direccion,
     gerente,
     telefono
@@ -73,25 +77,28 @@ export const createLocal = async (data) => {
     throw new Error("Empresa requerida")
   }
 
-  if (!cadena || !region || !comuna || !direccion) {
+  if (!cadena || !region_id || !comuna_id || !direccion) {
     throw new Error("Faltan campos obligatorios")
   }
 
-  const company = await db.query(
+  const location = await db.query(
     `
-    SELECT id
-    FROM public.companies
-    WHERE id = $1
-      AND deleted_at IS NULL
+    SELECT
+      r.name AS region,
+      c.name AS comuna
+    FROM regions r
+    JOIN comunas c ON c.region_id = r.id
+    WHERE r.id = $1
+      AND c.id = $2
     `,
-    [company_id]
+    [region_id, comuna_id]
   )
 
-  if (company.rows.length === 0) {
-    throw new Error("Empresa no válida")
+  if (!location.rows.length) {
+    throw new Error("Región o comuna inválida")
   }
 
-  /* MAPBOX GEOCODING */
+  const { region, comuna } = location.rows[0]
 
   const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
 
@@ -102,11 +109,11 @@ export const createLocal = async (data) => {
 
   const result = await db.query(
     `
-    INSERT INTO public.locales (
+    INSERT INTO locales (
       company_id,
       cadena,
-      region,
-      comuna,
+      region_id,
+      comuna_id,
       direccion,
       gerente,
       telefono,
@@ -119,8 +126,8 @@ export const createLocal = async (data) => {
     [
       company_id,
       clean(cadena),
-      clean(region),
-      clean(comuna),
+      region_id,
+      comuna_id,
       clean(direccion),
       clean(gerente),
       clean(telefono),
@@ -130,31 +137,38 @@ export const createLocal = async (data) => {
   )
 
   return result.rows[0]
+
 }
 
 /* =========================================
    ACTUALIZAR LOCAL
 ========================================= */
+
 export const updateLocal = async (id, data) => {
-
-  const existing = await getLocalById(id)
-
-  if (!existing) {
-    throw new Error("Local no encontrado")
-  }
 
   const {
     cadena,
-    region,
-    comuna,
+    region_id,
+    comuna_id,
     direccion,
     gerente,
     telefono
   } = data
 
-  if (!cadena || !region || !comuna || !direccion) {
-    throw new Error("Faltan campos obligatorios")
-  }
+  const location = await db.query(
+    `
+    SELECT
+      r.name AS region,
+      c.name AS comuna
+    FROM regions r
+    JOIN comunas c ON c.region_id = r.id
+    WHERE r.id = $1
+      AND c.id = $2
+    `,
+    [region_id, comuna_id]
+  )
+
+  const { region, comuna } = location.rows[0]
 
   const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
 
@@ -165,25 +179,24 @@ export const updateLocal = async (id, data) => {
 
   const result = await db.query(
     `
-    UPDATE public.locales
+    UPDATE locales
     SET
-      cadena = $1,
-      region = $2,
-      comuna = $3,
-      direccion = $4,
-      gerente = $5,
-      telefono = $6,
-      lat = $7,
-      lng = $8,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = $9
-      AND deleted_at IS NULL
+      cadena=$1,
+      region_id=$2,
+      comuna_id=$3,
+      direccion=$4,
+      gerente=$5,
+      telefono=$6,
+      lat=$7,
+      lng=$8,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE id=$9
     RETURNING *
     `,
     [
       clean(cadena),
-      clean(region),
-      clean(comuna),
+      region_id,
+      comuna_id,
       clean(direccion),
       clean(gerente),
       clean(telefono),
@@ -194,49 +207,40 @@ export const updateLocal = async (id, data) => {
   )
 
   return result.rows[0]
+
 }
 
 /* =========================================
    TOGGLE LOCAL
 ========================================= */
+
 export const toggleLocal = async (id) => {
-
-  const existing = await getLocalById(id)
-
-  if (!existing) {
-    throw new Error("Local no encontrado")
-  }
 
   const result = await db.query(
     `
-    UPDATE public.locales
+    UPDATE locales
     SET
       is_active = NOT is_active,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
-      AND deleted_at IS NULL
     RETURNING *
     `,
     [id]
   )
 
   return result.rows[0]
+
 }
 
 /* =========================================
    DELETE LOCAL
 ========================================= */
+
 export const deleteLocal = async (id) => {
-
-  const existing = await getLocalById(id)
-
-  if (!existing) {
-    throw new Error("Local no encontrado")
-  }
 
   await db.query(
     `
-    UPDATE public.locales
+    UPDATE locales
     SET deleted_at = NOW()
     WHERE id = $1
     `,
@@ -244,16 +248,14 @@ export const deleteLocal = async (id) => {
   )
 
   return true
+
 }
 
 /* =========================================
-   CARGA MASIVA EXCEL + GEOCODING
+   CARGA MASIVA EXCEL
 ========================================= */
-export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
-  if (!company_id) {
-    throw new Error("Empresa requerida")
-  }
+export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
   const workbook = xlsx.read(fileBuffer, { type: "buffer" })
   const sheetName = workbook.SheetNames[0]
@@ -261,41 +263,37 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
   const rows = xlsx.utils.sheet_to_json(sheet)
 
-  if (!rows.length) {
-    throw new Error("El archivo está vacío")
-  }
-
   const client = await db.connect()
 
   try {
 
     await client.query("BEGIN")
 
-    const insertedRows = []
-    const errors = []
-
-    for (let i = 0; i < rows.length; i++) {
-
-      const rowNumber = i + 2
+    for (const row of rows) {
 
       const {
         cadena,
-        region,
-        comuna,
+        region_id,
+        comuna_id,
         direccion,
         gerente,
         telefono
-      } = rows[i]
+      } = row
 
-      if (!cadena || !region || !comuna || !direccion) {
+      const location = await db.query(
+        `
+        SELECT
+          r.name AS region,
+          c.name AS comuna
+        FROM regions r
+        JOIN comunas c ON c.region_id = r.id
+        WHERE r.id = $1
+          AND c.id = $2
+        `,
+        [region_id, comuna_id]
+      )
 
-        errors.push({
-          row: rowNumber,
-          error: "Faltan campos obligatorios"
-        })
-
-        continue
-      }
+      const { region, comuna } = location.rows[0]
 
       const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
 
@@ -306,11 +304,11 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
 
       await client.query(
         `
-        INSERT INTO public.locales (
+        INSERT INTO locales (
           company_id,
           cadena,
-          region,
-          comuna,
+          region_id,
+          comuna_id,
           direccion,
           gerente,
           telefono,
@@ -322,8 +320,8 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         [
           company_id,
           clean(cadena),
-          clean(region),
-          clean(comuna),
+          region_id,
+          comuna_id,
           clean(direccion),
           clean(gerente),
           clean(telefono),
@@ -332,15 +330,12 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         ]
       )
 
-      insertedRows.push(rowNumber)
-
     }
 
     await client.query("COMMIT")
 
     return {
-      inserted: insertedRows.length,
-      errors
+      inserted: rows.length
     }
 
   } catch (error) {

@@ -4,11 +4,11 @@ import * as localeService from "./locales.services.js"
    OBTENER LOCALES
 ========================================= */
 export const getLocales = async (req, res) => {
+
   try {
 
     let companyId = req.query.company_id
 
-    // 🔒 ADMIN_CLIENTE solo ve su empresa
     if (req.user.role === "ADMIN_CLIENTE") {
       companyId = req.user.company_id
     }
@@ -26,17 +26,18 @@ export const getLocales = async (req, res) => {
     })
 
   }
+
 }
 
 /* =========================================
    CREAR LOCAL
 ========================================= */
 export const createLocal = async (req, res) => {
+
   try {
 
     let payload = { ...req.body }
 
-    // 🔒 ADMIN_CLIENTE solo crea en su empresa
     if (req.user.role === "ADMIN_CLIENTE") {
       payload.company_id = req.user.company_id
     }
@@ -54,12 +55,14 @@ export const createLocal = async (req, res) => {
     })
 
   }
+
 }
 
 /* =========================================
    ACTUALIZAR LOCAL
 ========================================= */
 export const updateLocal = async (req, res) => {
+
   try {
 
     const local = await localeService.getLocalById(req.params.id)
@@ -70,7 +73,6 @@ export const updateLocal = async (req, res) => {
       })
     }
 
-    // 🔒 ADMIN_CLIENTE solo puede modificar su empresa
     if (
       req.user.role === "ADMIN_CLIENTE" &&
       local.company_id !== req.user.company_id
@@ -96,12 +98,14 @@ export const updateLocal = async (req, res) => {
     })
 
   }
+
 }
 
 /* =========================================
    TOGGLE LOCAL
 ========================================= */
 export const toggleLocal = async (req, res) => {
+
   try {
 
     const local = await localeService.getLocalById(req.params.id)
@@ -112,7 +116,6 @@ export const toggleLocal = async (req, res) => {
       })
     }
 
-    // 🔒 ADMIN_CLIENTE solo puede modificar su empresa
     if (
       req.user.role === "ADMIN_CLIENTE" &&
       local.company_id !== req.user.company_id
@@ -135,12 +138,14 @@ export const toggleLocal = async (req, res) => {
     })
 
   }
+
 }
 
 /* =========================================
    ELIMINAR LOCAL
 ========================================= */
 export const deleteLocal = async (req, res) => {
+
   try {
 
     const local = await localeService.getLocalById(req.params.id)
@@ -175,12 +180,14 @@ export const deleteLocal = async (req, res) => {
     })
 
   }
+
 }
 
 /* =========================================
    CARGA MASIVA EXCEL
 ========================================= */
 export const uploadLocales = async (req, res) => {
+
   try {
 
     if (!req.file) {
@@ -191,7 +198,6 @@ export const uploadLocales = async (req, res) => {
 
     let companyId = req.body.company_id
 
-    // 🔒 ADMIN_CLIENTE solo puede subir a su empresa
     if (req.user.role === "ADMIN_CLIENTE") {
       companyId = req.user.company_id
     }
@@ -215,4 +221,5 @@ export const uploadLocales = async (req, res) => {
     })
 
   }
+
 }
