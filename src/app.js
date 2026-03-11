@@ -10,6 +10,7 @@ import routesRoutes from "./modules/routes/routes.routes.js"
 /* NUEVOS MODULOS */
 import regionsRoutes from "./modules/regions/regions.routes.js"
 import comunasRoutes from "./modules/comunas/comunas.routes.js"
+import questionsRoutes from "./modules/questions/questions.routes.js"
 
 const app = express()
 
@@ -58,6 +59,12 @@ app.use("/api/routes", routesRoutes)
 
 app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
+
+/* =========================================
+   PREGUNTAS FORMULARIO
+========================================= */
+
+app.use("/api/questions", questionsRoutes)
 
 /* =========================================
    HEALTH CHECK (BUENA PRACTICA)

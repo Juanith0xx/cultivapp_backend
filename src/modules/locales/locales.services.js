@@ -3,7 +3,7 @@ import xlsx from "xlsx"
 import geocodeAddress from "../../utils/geocodeAddress.js"
 
 /* =========================================
-   HELPERS
+    HELPERS
 ========================================= */
 
 const clean = (value) => {
@@ -12,37 +12,42 @@ const clean = (value) => {
 }
 
 /* =========================================
-   OBTENER LOCALES (DESDE LA VISTA)
+    OBTENER LOCALES (TABLA BASE CON JOINS)
 ========================================= */
 
 export const getLocales = async (company_id) => {
-
+  // Consultamos la tabla 'locales' directamente para incluir is_active = false
+  // Usamos LEFT JOIN para obtener los nombres de region y comuna que el frontend espera
   let query = `
-    SELECT *
-    FROM public.active_locales
+    SELECT 
+      l.*,
+      r.name AS region,
+      c.name AS comuna
+    FROM public.locales l
+    LEFT JOIN regions r ON l.region_id = r.id
+    LEFT JOIN comunas c ON l.comuna_id = c.id
+    WHERE l.deleted_at IS NULL
   `
 
   let values = []
 
   if (company_id) {
     values.push(company_id)
-    query += ` WHERE company_id = $${values.length}`
+    query += ` AND l.company_id = $${values.length}`
   }
 
-  query += ` ORDER BY created_at DESC`
+  query += ` ORDER BY l.created_at DESC`
 
   const result = await db.query(query, values)
 
   return result.rows
-
 }
 
 /* =========================================
-   OBTENER LOCAL POR ID
+    OBTENER LOCAL POR ID
 ========================================= */
 
 export const getLocalById = async (id) => {
-
   const result = await db.query(
     `
     SELECT *
@@ -54,15 +59,13 @@ export const getLocalById = async (id) => {
   )
 
   return result.rows[0]
-
 }
 
 /* =========================================
-   CREAR LOCAL
+    CREAR LOCAL
 ========================================= */
 
 export const createLocal = async (data) => {
-
   const {
     company_id,
     cadena,
@@ -99,9 +102,7 @@ export const createLocal = async (data) => {
   }
 
   const { region, comuna } = location.rows[0]
-
   const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
-
   const coordinates = await geocodeAddress(fullAddress)
 
   const lat = coordinates?.lat || null
@@ -137,15 +138,13 @@ export const createLocal = async (data) => {
   )
 
   return result.rows[0]
-
 }
 
 /* =========================================
-   ACTUALIZAR LOCAL
+    ACTUALIZAR LOCAL
 ========================================= */
 
 export const updateLocal = async (id, data) => {
-
   const {
     cadena,
     region_id,
@@ -169,9 +168,7 @@ export const updateLocal = async (id, data) => {
   )
 
   const { region, comuna } = location.rows[0]
-
   const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
-
   const coordinates = await geocodeAddress(fullAddress)
 
   const lat = coordinates?.lat || null
@@ -207,15 +204,13 @@ export const updateLocal = async (id, data) => {
   )
 
   return result.rows[0]
-
 }
 
 /* =========================================
-   TOGGLE LOCAL
+    TOGGLE LOCAL
 ========================================= */
 
 export const toggleLocal = async (id) => {
-
   const result = await db.query(
     `
     UPDATE locales
@@ -229,15 +224,13 @@ export const toggleLocal = async (id) => {
   )
 
   return result.rows[0]
-
 }
 
 /* =========================================
-   DELETE LOCAL
+    DELETE LOCAL
 ========================================= */
 
 export const deleteLocal = async (id) => {
-
   await db.query(
     `
     UPDATE locales
@@ -248,29 +241,24 @@ export const deleteLocal = async (id) => {
   )
 
   return true
-
 }
 
 /* =========================================
-   CARGA MASIVA EXCEL
+    CARGA MASIVA EXCEL
 ========================================= */
 
 export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
-
   const workbook = xlsx.read(fileBuffer, { type: "buffer" })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
 
   const rows = xlsx.utils.sheet_to_json(sheet)
-
   const client = await db.connect()
 
   try {
-
     await client.query("BEGIN")
 
     for (const row of rows) {
-
       const {
         cadena,
         region_id,
@@ -280,7 +268,7 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
         telefono
       } = row
 
-      const location = await db.query(
+      const location = await client.query(
         `
         SELECT
           r.name AS region,
@@ -294,9 +282,7 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
       )
 
       const { region, comuna } = location.rows[0]
-
       const fullAddress = `${direccion}, ${comuna}, ${region}, Chile`
-
       const coordinates = await geocodeAddress(fullAddress)
 
       const lat = coordinates?.lat || null
@@ -329,24 +315,14 @@ export const uploadLocalesFromExcel = async (fileBuffer, company_id) => {
           lng
         ]
       )
-
     }
 
     await client.query("COMMIT")
-
-    return {
-      inserted: rows.length
-    }
-
+    return { inserted: rows.length }
   } catch (error) {
-
     await client.query("ROLLBACK")
     throw error
-
   } finally {
-
     client.release()
-
   }
-
 }
