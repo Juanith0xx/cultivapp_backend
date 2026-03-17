@@ -1,7 +1,7 @@
 import express from "express"
 import cors from "cors"
-import path from "path" // 1. Importar path
-import { fileURLToPath } from "url" // Necesario para ES Modules
+import path from "path"
+import { fileURLToPath } from "url"
 
 import authRoutes from "./modules/auth/auth.routes.js"
 import companiesRoutes from "./modules/companies/companies.routes.js"
@@ -14,7 +14,6 @@ import regionsRoutes from "./modules/regions/regions.routes.js"
 import comunasRoutes from "./modules/comunas/comunas.routes.js"
 import questionsRoutes from "./modules/questions/questions.routes.js"
 
-// Configuración para obtener la ruta de la carpeta raíz
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -34,35 +33,24 @@ app.use(
 )
 
 /* =========================================
-   ESTÁTICOS (ESTO ES LO QUE FALTA)
-   Permite que las fotos se vean en el navegador
-========================================= */
-// Si la carpeta uploads está en la raíz (fuera de src) usamos '../uploads'
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")))
-
-/* =========================================
-   BODY PARSER
+   BODY PARSER (Debe ir antes de las rutas)
 ========================================= */
 app.use(express.json())
 
 /* =========================================
-   FORZAR UTF-8 EN RESPUESTAS
-   Nota: Quitamos el header global aquí porque express.static 
-   necesita manejar sus propios content-types (image/jpeg, etc.)
+   ESTÁTICOS
 ========================================= */
-app.use("/api", (req, res, next) => {
-  res.setHeader("Content-Type", "application/json; charset=utf-8")
-  next()
-})
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")))
 
 /* =========================================
    ROUTES API
 ========================================= */
+// IMPORTANTE: Quitamos el middleware que forzaba el header manualmente
 app.use("/api/auth", authRoutes)
 app.use("/api/companies", companiesRoutes)
 app.use("/api/users", usersRoutes)
 app.use("/api/locales", localesRoutes)
-app.use("/api/routes", routesRoutes)
+app.use("/api/routes", routesRoutes) // <--- Esta es la que usa Juan
 app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
