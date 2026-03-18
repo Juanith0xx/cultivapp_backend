@@ -1,33 +1,40 @@
 import * as routeService from "./routes.service.js"
 
 /* =========================================================
-   CREAR RUTA (Con Soporte para Agendamiento SaaS)
+   CREAR RUTAS (Soporte Manual y Masivo)
+   Permite al Admin_Cliente agendar una o varias tareas
 ========================================================= */
 export const createRoute = async (req, res) => {
   try {
     const company_id = req.user.company_id
+    const { tasks } = req.body 
 
-    // Extraemos los nuevos campos que agregamos a la DB en Linux
-    const { 
-      user_id, 
-      local_id, 
-      visit_date, 
-      start_time, 
-      order_sequence, 
-      warehouse_id 
-    } = req.body
+    // Si viene una sola tarea, la convertimos en array para procesar igual
+    const tasksArray = Array.isArray(tasks) ? tasks : [req.body]
 
-    const route = await routeService.createRoute({
+    if (tasksArray.length === 0) {
+      return res.status(400).json({ message: "No se proporcionaron tareas para agendar" })
+    }
+
+    // Preparamos los datos asegurando que pertenezcan a la empresa del Admin
+    const formattedTasks = tasksArray.map(task => ({
       company_id,
-      user_id,
-      local_id,
-      visit_date,      // Nuevo: Fecha de la visita
-      start_time,      // Nuevo: Hora programada
-      order_sequence,  // Nuevo: Orden en la ruta
-      warehouse_id     // Nuevo: Bodega asignada
-    })
+      user_id: task.user_id,
+      local_id: task.local_id,
+      visit_date: task.visit_date,
+      start_time: task.start_time || '09:00:00',
+      order_sequence: task.order_sequence || 1,
+      warehouse_id: task.warehouse_id || null,
+      status: 'PENDING'
+    }))
 
-    res.status(201).json(route)
+    const result = await routeService.bulkCreateRoutes(formattedTasks)
+    
+    res.status(201).json({
+      message: "Agenda procesada exitosamente",
+      count: result.length,
+      data: result
+    })
 
   } catch (error) {
     console.error("❌ CREATE ROUTE ERROR:", error)
@@ -36,72 +43,104 @@ export const createRoute = async (req, res) => {
 }
 
 /* =========================================================
-   OBTENER RUTAS EMPRESA (Dashboard de Admin)
+   CHECK-IN CON GPS (Para el reponedor)
+   Calcula distancia y valida posición contra el local
+========================================================= */
+export const checkIn = async (req, res) => {
+  try {
+    const company_id = req.user.company_id
+    const { id } = req.params 
+    const { lat, lng } = req.body // Coordenadas enviadas desde el celular
+
+    if (!lat || !lng) {
+      return res.status(400).json({ message: "Coordenadas GPS requeridas para iniciar visita" })
+    }
+
+    // 1. Buscamos la ruta y los datos del local asociado
+    const route = await routeService.getRouteDetail(id, company_id)
+    if (!route) return res.status(404).json({ message: "Ruta no encontrada" })
+
+    // 2. Calculamos distancia (Haversine) entre reponedor y local
+    const distance = calculateDistance(lat, lng, route.local_lat, route.local_lng)
+    
+    // 3. Definimos si es válido (ej: menos de 250 metros)
+    const isValidGps = distance <= 250 
+
+    // 4. Registramos en la DB
+    const result = await routeService.registerCheckInWithGps({
+      id,
+      company_id,
+      lat_in: lat,
+      lng_in: lng,
+      distance_meters: Math.round(distance),
+      is_valid_gps: isValidGps
+    })
+
+    res.json({ 
+      message: isValidGps ? "Check-in exitoso" : "Check-in registrado fuera de rango", 
+      isValid: isValidGps,
+      distance: Math.round(distance),
+      data: result 
+    })
+
+  } catch (error) {
+    console.error("❌ CHECK-IN GPS ERROR:", error)
+    res.status(400).json({ message: error.message })
+  }
+}
+
+/* =========================================================
+   AUXILIAR: Cálculo de Distancia (Fórmula Haversine)
+========================================================= */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371e3 // Radio de la Tierra en metros
+  const p1 = lat1 * Math.PI / 180
+  const p2 = lat2 * Math.PI / 180
+  const dp = (lat2 - lat1) * Math.PI / 180
+  const dl = (lon2 - lon1) * Math.PI / 180
+
+  const a = Math.sin(dp / 2) * Math.sin(dp / 2) +
+            Math.cos(p1) * Math.cos(p2) *
+            Math.sin(dl / 2) * Math.sin(dl / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+
+  return R * c // Distancia en metros
+}
+
+/* =========================================================
+   OBTENER RUTAS (Dashboard y Filtros)
 ========================================================= */
 export const getRoutes = async (req, res) => {
   try {
     const company_id = req.user.company_id
     const routes = await routeService.getRoutesByCompany(company_id)
     res.json(routes)
-
   } catch (error) {
-    console.error("❌ GET ROUTES ERROR:", error)
     res.status(400).json({ message: error.message })
   }
 }
 
-/* =========================================================
-   OBTENER RUTAS POR USUARIO (Para el Calendario Inteligente)
-========================================================= */
 export const getRoutesByUser = async (req, res) => {
   try {
     const company_id = req.user.company_id
     const { userId } = req.params
-
-    // Verificación de seguridad para evitar peticiones "undefined"
     if (!userId || userId === 'undefined') {
       return res.status(400).json({ message: "ID de usuario requerido" })
     }
-
     const routes = await routeService.getRoutesByUser(company_id, userId)
     res.json(routes)
-
   } catch (error) {
-    console.error("❌ GET ROUTES USER ERROR:", error)
     res.status(400).json({ message: error.message })
   }
 }
 
-/* =========================================================
-   ELIMINAR RUTA
-========================================================= */
 export const deleteRoute = async (req, res) => {
   try {
     const company_id = req.user.company_id
     const { id } = req.params
-
     const result = await routeService.deleteRoute(company_id, id)
     res.json(result)
-
   } catch (error) {
-    console.error("❌ DELETE ROUTE ERROR:", error)
-    res.status(400).json({ message: error.message })
-  }
-}
-
-/* =========================================================
-   CHECK-IN (NUEVO: Para el botón "Iniciar Visita")
-========================================================= */
-export const checkIn = async (req, res) => {
-  try {
-    const company_id = req.user.company_id
-    const { id } = req.params // ID de la ruta específica
-
-    const result = await routeService.registerCheckIn(id, company_id)
-    res.json({ message: "Visita iniciada correctamente", data: result })
-
-  } catch (error) {
-    console.error("❌ CHECK-IN ERROR:", error)
     res.status(400).json({ message: error.message })
   }
 }
