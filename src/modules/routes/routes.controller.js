@@ -2,137 +2,110 @@ import * as routeService from "./routes.service.js";
 import crypto from "crypto";
 
 /* =========================================================
-   CREAR RUTAS (Soporte Manual y Masivo por Excel)
+   OBTENER MIS TAREAS (Timeline del Reponedor)
+========================================================= */
+export const getMyTasks = async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const company_id = req.user.company_id;
+    
+    // Capturamos la fecha del query (?date=YYYY-MM-DD) o usamos hoy
+    const dateToQuery = req.query.date || new Date().toISOString().split('T')[0];
+
+    const tasks = await routeService.getRoutesByUserAndDate(company_id, user_id, dateToQuery);
+    
+    const formattedTasks = (tasks || []).map(t => ({
+      ...t,
+      initials: `${t.first_name?.[0] || ''}${t.last_name?.[0] || ''}`.toUpperCase(),
+      user_name: `${t.first_name || ''} ${t.last_name || ''}`.trim(),
+      // Calculamos el día de la semana para la UI si es necesario
+      day_of_week_name: new Date(t.visit_date || dateToQuery).toLocaleDateString('es-CL', { weekday: 'long' })
+    }));
+
+    res.json(formattedTasks);
+  } catch (error) {
+    console.error("❌ ERROR getMyTasks:", error.message);
+    res.status(400).json({ message: "Error al obtener la agenda" });
+  }
+};
+
+/* =========================================================
+   CREAR RUTA (UNIFICADA: Única o Recurrente)
 ========================================================= */
 export const createRoute = async (req, res) => {
   try {
     const company_id = req.user.company_id;
-    const { tasks } = req.body;
+    const { 
+      user_id, local_id, start_time, 
+      visit_date, selectedDays, is_recurring 
+    } = req.body;
 
-    const tasksArray = Array.isArray(tasks) ? tasks : [req.body];
+    let tasksToCreate = [];
 
-    if (tasksArray.length === 0) {
-      return res.status(400).json({ message: "No se proporcionaron tareas para agendar" });
+    if (is_recurring && selectedDays?.length > 0) {
+      // 🔄 CASO RECURRENTE: Creamos un grupo para varios días de la semana
+      const schedule_group_id = crypto.randomUUID();
+      tasksToCreate = selectedDays.map(day => ({
+        company_id,
+        user_id,
+        local_id,
+        start_time: start_time || '09:00:00',
+        visit_date: null, // No tiene fecha fija
+        day_of_week: day,
+        schedule_group_id,
+        is_recurring: true,
+        status: 'PENDING'
+      }));
+    } else {
+      // 📅 CASO FECHA ÚNICA: Una sola visita un día específico
+      tasksToCreate = [{
+        company_id,
+        user_id,
+        local_id,
+        start_time: start_time || '09:00:00',
+        visit_date: visit_date, // Fecha exacta elegida en el calendario
+        day_of_week: visit_date ? new Date(visit_date).getDay() : null,
+        is_recurring: false,
+        status: 'PENDING'
+      }];
     }
 
-    const formattedTasks = tasksArray.map(task => ({
-      company_id,
-      user_id: task.user_id,
-      local_id: task.local_id,
-      visit_date: task.visit_date || null,
-      start_time: task.start_time || '09:00:00',
-      order_sequence: task.order_sequence || 1,
-      warehouse_id: task.warehouse_id || null,
-      day_of_week: task.day_of_week || null,
-      schedule_group_id: task.schedule_group_id || null,
-      is_recurring: task.is_recurring || false,
-      status: 'PENDING'
-    }));
-
-    const result = await routeService.bulkCreateRoutes(formattedTasks);
-    
-    res.status(201).json({
-      message: "Agenda procesada exitosamente",
-      count: result.length,
-      data: result
-    });
-
+    const result = await routeService.bulkCreateRoutes(tasksToCreate);
+    res.status(201).json({ message: "Ruta(s) creada(s) con éxito", data: result });
   } catch (error) {
-    console.error("❌ CREATE ROUTE ERROR:", error);
+    console.error("❌ ERROR createRoute:", error.message);
     res.status(400).json({ message: error.message });
   }
 };
 
 /* =========================================================
-   CREAR RUTAS MASIVAS (Días de la Semana)
-========================================================= */
-export const createBulk = async (req, res) => {
-  try {
-    const company_id = req.user.company_id;
-    const { user_id, local_id, start_time, selectedDays } = req.body;
-
-    if (!selectedDays || selectedDays.length === 0) {
-      return res.status(400).json({ message: "Debes seleccionar al menos un día" });
-    }
-
-    const schedule_group_id = crypto.randomUUID();
-
-    const formattedTasks = selectedDays.map(day => ({
-      company_id,
-      user_id,
-      local_id,
-      visit_date: null,
-      start_time: start_time || '09:00:00',
-      day_of_week: day,
-      schedule_group_id,
-      is_recurring: true,
-      status: 'PENDING'
-    }));
-
-    const result = await routeService.bulkCreateRoutes(formattedTasks);
-    
-    res.status(201).json({
-      message: `${result.length} rutas agendadas correctamente`,
-      data: result
-    });
-
-  } catch (error) {
-    console.error("❌ CREATE BULK ERROR:", error);
-    res.status(400).json({ message: error.message });
-  }
-};
-
-/* =========================================================
-   ACTUALIZAR RUTA (Edición)
-   Modificado para soportar edición de múltiples días
+   ACTUALIZAR RUTA (Soporta cambio de Fecha o Días)
 ========================================================= */
 export const updateRoute = async (req, res) => {
   try {
     const company_id = req.user.company_id;
     const { id } = req.params;
-    const { user_id, local_id, start_time, selectedDays, visit_date } = req.body;
-
-    // Aseguramos que selectedDays sea un array para evitar errores en el service
-    const safeSelectedDays = Array.isArray(selectedDays) ? selectedDays : [];
-
-    const updateData = {
-      user_id,
-      local_id,
-      start_time,
-      selectedDays: safeSelectedDays, // Enviamos el array completo
-      visit_date,
-      company_id
-    };
-
-    const result = await routeService.updateRoute(id, updateData);
     
-    if (!result) {
-      return res.status(404).json({ message: "No se encontró la ruta para actualizar" });
-    }
+    // Enviamos todo el body al service para que él decida si actualiza
+    // una sola fila o un grupo recurrente.
+    const result = await routeService.updateRoute(id, { ...req.body, company_id });
+    
+    if (!result) return res.status(404).json({ message: "Ruta no encontrada" });
 
-    res.json({
-      message: "Planificación actualizada exitosamente",
-      data: result
-    });
-
+    res.json({ message: "Actualización exitosa", data: result });
   } catch (error) {
-    console.error("❌ UPDATE ROUTE ERROR:", error);
     res.status(400).json({ message: error.message });
   }
 };
 
 /* =========================================================
-   CHECK-IN CON GPS (Para el reponedor)
+   CHECK-IN CON GPS
 ========================================================= */
 export const checkIn = async (req, res) => {
   try {
     const company_id = req.user.company_id;
     const { id } = req.params;
     const { lat, lng } = req.body;
-
-    if (!lat || !lng) {
-      return res.status(400).json({ message: "Coordenadas GPS requeridas" });
-    }
 
     const route = await routeService.getRouteDetail(id, company_id);
     if (!route) return res.status(404).json({ message: "Ruta no encontrada" });
@@ -141,29 +114,26 @@ export const checkIn = async (req, res) => {
     const isValidGps = distance <= 250; 
 
     const result = await routeService.registerCheckInWithGps({
-      id,
-      company_id,
-      lat_in: lat,
-      lng_in: lng,
+      id, company_id, lat_in: lat, lng_in: lng,
       distance_meters: Math.round(distance),
       is_valid_gps: isValidGps
     });
 
     res.json({ 
-      message: isValidGps ? "Check-in exitoso" : "Check-in fuera de rango", 
-      isValid: isValidGps,
-      distance: Math.round(distance),
+      isValid: isValidGps, 
+      distance: Math.round(distance), 
+      message: isValidGps ? "Check-in exitoso" : "Estás fuera del rango permitido",
       data: result 
     });
-
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 };
 
-/* =========================================
-   AUXILIAR: Cálculo de Distancia
-========================================= */
+/* =========================================================
+   AUXILIARES Y GESTIÓN ADMIN
+========================================================= */
+
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3;
   const p1 = lat1 * Math.PI / 180;
@@ -177,14 +147,11 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-/* =========================================================
-   OBTENER RUTAS
-========================================================= */
 export const getRoutes = async (req, res) => {
   try {
     const company_id = req.user.company_id;
     const routes = await routeService.getRoutesByCompany(company_id);
-    res.json(routes);
+    res.json(routes || []);
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -194,11 +161,8 @@ export const getRoutesByUser = async (req, res) => {
   try {
     const company_id = req.user.company_id;
     const { userId } = req.params;
-    if (!userId || userId === 'undefined') {
-      return res.status(400).json({ message: "ID de usuario requerido" });
-    }
     const routes = await routeService.getRoutesByUser(company_id, userId);
-    res.json(routes);
+    res.json(routes || []);
   } catch (error) {
     res.status(400).json({ message: error.message });
   }

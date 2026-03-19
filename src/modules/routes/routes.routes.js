@@ -3,52 +3,59 @@ import auth from "../../middlewares/auth.js"
 import roleGuard from "../../middlewares/roleGuard.js"
 
 import {
-  createRoute,
+  createRoute,      // 🟢 Ahora maneja tanto rutas únicas como masivas
   getRoutes,
   getRoutesByUser,
   deleteRoute,
   checkIn,
-  createBulk,   // <-- Nueva: Para agendar varios días
-  updateRoute   // <-- Nueva: Para editar (reasignar, cambiar hora/día)
+  updateRoute,
+  getMyTasks
 } from "./routes.controller.js"
 
 const router = Router()
 
 /* =========================================================
-   RUTAS DE GESTIÓN (ROOT y ADMIN)
-========================================================= */
-
-// Crear ruta individual
-router.post("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
-
-// NUEVA: Crear rutas masivas (Días de la semana)
-router.post("/bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createBulk)
-
-// Obtener todas las rutas
-router.get("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getRoutes)
-
-// NUEVA: Editar una ruta existente (Cambiar reponedor, local, hora o día)
-router.put("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), updateRoute)
-
-// Eliminar ruta
-router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteRoute)
-
-/* =========================================================
    RUTAS DE OPERACIÓN (USUARIO / MERCADERISTA)
 ========================================================= */
 
+// Obtener agenda del día para el mercaderista logueado
 router.get(
-  "/user/:userId", 
+  "/my-tasks", 
   auth, 
-  roleGuard("ROOT", "ADMIN_CLIENTE", "USUARIO"), 
-  getRoutesByUser
+  roleGuard("USUARIO", "ADMIN_CLIENTE", "ROOT"), 
+  getMyTasks
 )
 
-router.put(
+// Check-in con GPS (Cambiado a POST para recibir coordenadas en el body)
+router.post(
   "/:id/check-in", 
   auth, 
   roleGuard("USUARIO"), 
   checkIn
 )
+
+/* =========================================================
+   RUTAS DE GESTIÓN (ROOT y ADMIN)
+========================================================= */
+
+// 🟢 Crear ruta: Soporta individual (por fecha) y masiva (por días) en un solo endpoint
+router.post("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
+
+// Obtener todas las rutas generales
+router.get("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getRoutes)
+
+// Obtener rutas de un usuario específico (Vista Admin)
+router.get(
+  "/user/:userId", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  getRoutesByUser
+)
+
+// Editar una ruta o grupo de rutas
+router.put("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), updateRoute)
+
+// Eliminar ruta o grupo recurrente
+router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteRoute)
 
 export default router
