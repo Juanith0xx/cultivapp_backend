@@ -7,7 +7,9 @@ import {
   getRoutes,
   getRoutesByUser,
   deleteRoute,
-  checkIn // <-- Importamos la nueva función
+  checkIn,
+  createBulk,   // <-- Nueva: Para agendar varios días
+  updateRoute   // <-- Nueva: Para editar (reasignar, cambiar hora/día)
 } from "./routes.controller.js"
 
 const router = Router()
@@ -15,15 +17,26 @@ const router = Router()
 /* =========================================================
    RUTAS DE GESTIÓN (ROOT y ADMIN)
 ========================================================= */
+
+// Crear ruta individual
 router.post("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
+
+// NUEVA: Crear rutas masivas (Días de la semana)
+router.post("/bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createBulk)
+
+// Obtener todas las rutas
 router.get("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getRoutes)
+
+// NUEVA: Editar una ruta existente (Cambiar reponedor, local, hora o día)
+router.put("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), updateRoute)
+
+// Eliminar ruta
 router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteRoute)
 
 /* =========================================================
    RUTAS DE OPERACIÓN (USUARIO / MERCADERISTA)
 ========================================================= */
 
-// CORRECCIÓN: Permitimos que el USUARIO también acceda a sus propias rutas
 router.get(
   "/user/:userId", 
   auth, 
@@ -31,7 +44,6 @@ router.get(
   getRoutesByUser
 )
 
-// NUEVA: Ruta para que el usuario marque el inicio de su visita
 router.put(
   "/:id/check-in", 
   auth, 
