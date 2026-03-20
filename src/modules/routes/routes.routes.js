@@ -3,7 +3,7 @@ import auth from "../../middlewares/auth.js"
 import roleGuard from "../../middlewares/roleGuard.js"
 
 import {
-  createRoute,      // 🟢 Ahora maneja tanto rutas únicas como masivas
+  createRoute,      
   getRoutes,
   getRoutesByUser,
   deleteRoute,
@@ -15,10 +15,11 @@ import {
 const router = Router()
 
 /* =========================================================
-   RUTAS DE OPERACIÓN (USUARIO / MERCADERISTA)
+   RUTAS DE GESTIÓN (ROOT y ADMIN)
+   IMPORTANTE: Las rutas estáticas van SIEMPRE antes que las dinámicas (:id)
 ========================================================= */
 
-// Obtener agenda del día para el mercaderista logueado
+// 🟢 GET: Mi agenda (Mercaderista) - La subimos para que no choque con /:id
 router.get(
   "/my-tasks", 
   auth, 
@@ -26,25 +27,15 @@ router.get(
   getMyTasks
 )
 
-// Check-in con GPS (Cambiado a POST para recibir coordenadas en el body)
-router.post(
-  "/:id/check-in", 
-  auth, 
-  roleGuard("USUARIO"), 
-  checkIn
-)
-
-/* =========================================================
-   RUTAS DE GESTIÓN (ROOT y ADMIN)
-========================================================= */
-
-// 🟢 Crear ruta: Soporta individual (por fecha) y masiva (por días) en un solo endpoint
+// 🟢 POST: Crear ruta (Individual o Masiva)
+// Definimos ambas para asegurar que el Frontend nunca dé 404
 router.post("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
+router.post("/bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
 
-// Obtener todas las rutas generales
+// 🟢 GET: Listado general
 router.get("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getRoutes)
 
-// Obtener rutas de un usuario específico (Vista Admin)
+// 🟢 GET: Rutas por usuario específico
 router.get(
   "/user/:userId", 
   auth, 
@@ -52,10 +43,23 @@ router.get(
   getRoutesByUser
 )
 
-// Editar una ruta o grupo de rutas
+/* =========================================================
+   RUTAS DINÁMICAS (Contienen parámetros :id)
+   Se dejan al final para evitar que atrapen peticiones de rutas estáticas
+========================================================= */
+
+// Check-in con GPS
+router.post(
+  "/:id/check-in", 
+  auth, 
+  roleGuard("USUARIO"), 
+  checkIn
+)
+
+// Editar una ruta o grupo
 router.put("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), updateRoute)
 
-// Eliminar ruta o grupo recurrente
+// Eliminar ruta o grupo
 router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteRoute)
 
 export default router

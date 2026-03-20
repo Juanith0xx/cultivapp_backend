@@ -4,14 +4,15 @@ import fs from "fs"
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Definimos la carpeta base dependiendo del campo que viene del frontend
     let folder = "uploads/"
     
+    // 🚩 Definimos carpetas por tipo de archivo
     if (file.fieldname === "documento_achs") {
       folder = "uploads/ACHS/"
+    } else if (file.fieldname === "file") { 
+      folder = "uploads/temp_excel/" // Carpeta temporal para los Excel de locales
     }
 
-    // Crear la carpeta si no existe (importante para entornos Linux/Render)
     if (!fs.existsSync(folder)) {
       fs.mkdirSync(folder, { recursive: true })
     }
@@ -19,27 +20,40 @@ const storage = multer.diskStorage({
     cb(null, folder)
   },
   filename: (req, file, cb) => {
-    // Generamos un nombre único: campo-timestamp-aleatorio.extension
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
     const ext = path.extname(file.originalname)
     cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`)
   }
 })
 
-// Filtro para asegurar que solo suban lo que corresponde
 const fileFilter = (req, file, cb) => {
+  // 1. Validar PDF de ACHS
   if (file.fieldname === "documento_achs") {
     if (file.mimetype === "application/pdf") {
       cb(null, true)
     } else {
       cb(new Error("La ACHS debe ser un archivo PDF"), false)
     }
-  } else {
-    // Para la foto permitimos imágenes
+  } 
+  // 2. Validar EXCEL de Locales (🚩 NUEVA REGLA)
+  else if (file.fieldname === "file") {
+    const isExcel = 
+      file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || 
+      file.mimetype === "application/vnd.ms-excel" ||
+      file.originalname.match(/\.(xlsx|xls)$/)
+
+    if (isExcel) {
+      cb(null, true)
+    } else {
+      cb(new Error("El archivo de locales debe ser un Excel (.xlsx o .xls)"), false)
+    }
+  }
+  // 3. Validar FOTOS (para reponedores/perfil)
+  else {
     if (file.mimetype.startsWith("image/")) {
       cb(null, true)
     } else {
-      cb(new Error("La foto debe ser una imagen válida"), false)
+      cb(new Error("El archivo enviado debe ser una imagen válida"), false)
     }
   }
 }
@@ -47,7 +61,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 10 * 1024 * 1024 }, // Subimos a 10MB por si el Excel es pesado
 })
 
 export default upload

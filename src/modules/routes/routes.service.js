@@ -10,16 +10,19 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
         ur.id, ur.visit_date, ur.start_time, ur.status, ur.order_sequence, 
         ur.day_of_week, ur.is_recurring, ur.lat_in, ur.lng_in, ur.check_in,
         l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
+        c.name as comuna_name,
         u.first_name, u.last_name
       FROM public.user_routes ur
       JOIN public.locales l ON ur.local_id = l.id
+      LEFT JOIN public.comunas c ON l.comuna_id = c.id
       JOIN public.users u ON ur.user_id = u.id
       WHERE ur.company_id = $1 
         AND ur.user_id = $2
+        AND ur.deleted_at IS NULL
         AND (
-          CAST(ur.visit_date AS DATE) = CAST($3 AS DATE)
+          (ur.is_recurring = false AND ur.visit_date::date = $3::date)
           OR 
-          (ur.is_recurring = true AND ur.day_of_week = EXTRACT(DOW FROM CAST($3 AS DATE)))
+          (ur.is_recurring = true AND ur.day_of_week = EXTRACT(DOW FROM $3::date)::integer)
         )
       ORDER BY ur.start_time ASC, ur.order_sequence ASC
     `;
@@ -33,36 +36,69 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
 
 /* =========================================================
    CREAR RUTAS (SOPORTE MANUAL / MASIVO / RECURRENTE)
+   🚩 MEJORA: Aplanado de días recurrentes y ON CONFLICT
 ========================================================= */
 export const bulkCreateRoutes = async (tasks) => {
+  const client = await db.connect();
   const results = [];
-  for (const task of tasks) {
-    const { 
-      company_id, user_id, local_id, visit_date, start_time, 
-      order_sequence, warehouse_id, day_of_week, schedule_group_id, is_recurring 
-    } = task;
+  
+  try {
+    await client.query('BEGIN');
+    
+    for (const task of tasks) {
+      const { 
+        company_id, user_id, local_id, visit_date, start_time, 
+        order_sequence, warehouse_id, is_recurring, selectedDays, schedule_group_id 
+      } = task;
 
-    try {
-      const query = `
-        INSERT INTO public.user_routes (
-          company_id, user_id, local_id, visit_date, start_time, 
-          order_sequence, warehouse_id, status, 
-          day_of_week, schedule_group_id, is_recurring,
-          created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, NOW(), NOW()) 
-        RETURNING *;
-      `;
-      const result = await db.query(query, [
-        company_id, user_id, local_id, visit_date || null, start_time, 
-        order_sequence || 0, warehouse_id || null,
-        day_of_week, schedule_group_id, is_recurring || false
-      ]);
-      if (result.rows.length > 0) results.push(result.rows[0]);
-    } catch (error) {
-      console.error("❌ Error insertando ruta:", error.message);
+      // Determinamos qué días insertar. 
+      // Si el frontend envía selectedDays (array), iteramos. Si no, usamos el day_of_week individual o null.
+      const daysToInsert = (is_recurring && Array.isArray(selectedDays)) 
+        ? selectedDays 
+        : [task.day_of_week !== undefined ? task.day_of_week : null];
+
+      for (const day of daysToInsert) {
+        const cleanDay = day !== null ? parseInt(day, 10) : null;
+        const cleanOrder = parseInt(order_sequence, 10) || 0;
+
+        const query = `
+          INSERT INTO public.user_routes (
+            company_id, user_id, local_id, visit_date, start_time, 
+            order_sequence, warehouse_id, status, 
+            day_of_week, schedule_group_id, is_recurring,
+            created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, NOW(), NOW()) 
+          ON CONFLICT (user_id, local_id, visit_date, day_of_week) 
+          DO UPDATE SET start_time = EXCLUDED.start_time, updated_at = NOW()
+          RETURNING *;
+        `;
+        
+        const result = await client.query(query, [
+          company_id, 
+          user_id, 
+          local_id, 
+          is_recurring ? null : visit_date, 
+          start_time, 
+          isNaN(cleanOrder) ? 0 : cleanOrder, 
+          warehouse_id || null,
+          isNaN(cleanDay) ? null : cleanDay, 
+          schedule_group_id || null, 
+          is_recurring || false
+        ]);
+        
+        if (result.rows.length > 0) results.push(result.rows[0]);
+      }
     }
+
+    await client.query('COMMIT');
+    return results;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Error en bulkCreateRoutes Service:", error.message);
+    throw error;
+  } finally {
+    client.release();
   }
-  return results;
 };
 
 /* =========================================================
@@ -87,29 +123,16 @@ export const registerCheckInWithGps = async (data) => {
 };
 
 /* =========================================================
-   OBTENER RUTAS POR EMPRESA (🚩 MEJORADA PARA MONITOREO GPS)
+   OBTENER RUTAS POR EMPRESA (VISTA ADMINISTRADOR)
+   🚩 MEJORA: Eliminado el filtro de CURRENT_DATE para ver TODO
 ========================================================= */
 export const getRoutesByCompany = async (company_id) => {
-  // Eliminamos el GROUP BY para que el monitor vea cada evento individual de hoy
   const query = `
     SELECT 
-      ur.id,
-      ur.status, 
-      ur.start_time, 
-      ur.visit_date, 
-      ur.is_recurring, 
-      ur.check_in,
-      ur.lat_in, 
-      ur.lng_in, 
-      ur.is_valid_gps, 
-      ur.distance_meters,
-      u.first_name, 
-      u.last_name, 
-      u.rut as user_rut,
-      l.cadena, 
-      l.direccion, 
-      l.lat as local_lat, 
-      l.lng as local_lng,
+      ur.id, ur.status, ur.start_time, ur.visit_date, ur.is_recurring, ur.day_of_week,
+      ur.check_in, ur.lat_in, ur.lng_in, ur.is_valid_gps, ur.distance_meters,
+      u.first_name, u.last_name, u.rut as user_rut,
+      l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
       c.name as comuna_name
     FROM public.user_routes ur
     JOIN public.users u ON ur.user_id = u.id
@@ -117,13 +140,7 @@ export const getRoutesByCompany = async (company_id) => {
     LEFT JOIN public.comunas c ON l.comuna_id = c.id
     WHERE ur.company_id = $1 
       AND ur.deleted_at IS NULL
-      AND (
-        -- Filtro para el monitor: Ver lo de hoy o lo que esté en proceso
-        ur.status = 'IN_PROGRESS' 
-        OR CAST(ur.visit_date AS DATE) = CURRENT_DATE
-        OR (ur.is_recurring = true AND ur.day_of_week = EXTRACT(DOW FROM CURRENT_DATE))
-      )
-    ORDER BY ur.check_in DESC NULLS LAST, ur.start_time ASC;
+    ORDER BY ur.is_recurring DESC, ur.visit_date ASC, ur.start_time ASC;
   `;
   const result = await db.query(query, [company_id]);
   return result.rows;
@@ -145,20 +162,28 @@ export const getRouteDetail = async (id, company_id) => {
 
 export const updateRoute = async (id, data) => {
   const { user_id, local_id, start_time, selectedDays, visit_date, company_id } = data;
+  
   const routeInfo = await db.query(
     `SELECT schedule_group_id, is_recurring FROM public.user_routes WHERE id = $1`, [id]
   );
+  
+  if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
+  
   const groupId = routeInfo.rows[0]?.schedule_group_id;
 
   if (groupId && routeInfo.rows[0]?.is_recurring) {
+    // Si es recurrente, borramos el grupo y recreamos usando bulkCreateRoutes que ya maneja los días
     await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND company_id = $2`, [groupId, company_id]);
-    const tasks = (selectedDays || []).map(day => ({
+    
+    const tasks = [{
       company_id, user_id, local_id, visit_date: null, start_time,
-      day_of_week: day, schedule_group_id: groupId, is_recurring: true, status: 'PENDING'
-    }));
+      selectedDays, schedule_group_id: groupId, is_recurring: true
+    }];
+    
     const updatedRows = await bulkCreateRoutes(tasks);
     return updatedRows[0];
   } else {
+    // Si es individual
     const result = await db.query(
       `UPDATE public.user_routes SET user_id = $1, local_id = $2, start_time = $3, visit_date = $4, updated_at = NOW()
        WHERE id = $5 AND company_id = $6 RETURNING *`,
@@ -170,7 +195,11 @@ export const updateRoute = async (id, data) => {
 
 export const deleteRoute = async (company_id, route_id) => {
   const routeInfo = await db.query(`SELECT schedule_group_id FROM public.user_routes WHERE id = $1 AND company_id = $2`, [route_id, company_id]);
+  
+  if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
+  
   const groupId = routeInfo.rows[0]?.schedule_group_id;
+  
   if (groupId) {
     await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND company_id = $2`, [groupId, company_id]);
   } else {

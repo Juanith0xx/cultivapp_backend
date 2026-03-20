@@ -1,225 +1,165 @@
-import * as localeService from "./locales.services.js"
+import * as localeService from "./locales.services.js";
+import fs from "fs"; // 🚩 Importante para leer el archivo del disco
+import path from "path";
 
 /* =========================================
    OBTENER LOCALES
 ========================================= */
 export const getLocales = async (req, res) => {
-
   try {
-
-    let companyId = req.query.company_id
+    let companyId = req.query.company_id;
 
     if (req.user.role === "ADMIN_CLIENTE") {
-      companyId = req.user.company_id
+      companyId = req.user.company_id;
     }
 
-    const locales = await localeService.getLocales(companyId)
-
-    res.json(locales)
+    const locales = await localeService.getLocales(companyId);
+    res.json(locales);
 
   } catch (error) {
-
-    console.error("GET LOCALES ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    console.error("❌ GET LOCALES ERROR:", error.message);
+    res.status(400).json({ message: error.message });
   }
-
-}
+};
 
 /* =========================================
    CREAR LOCAL
 ========================================= */
 export const createLocal = async (req, res) => {
-
   try {
-
-    let payload = { ...req.body }
+    let payload = { ...req.body };
 
     if (req.user.role === "ADMIN_CLIENTE") {
-      payload.company_id = req.user.company_id
+      payload.company_id = req.user.company_id;
     }
 
-    const local = await localeService.createLocal(payload)
-
-    res.status(201).json(local)
+    const local = await localeService.createLocal(payload);
+    res.status(201).json(local);
 
   } catch (error) {
-
-    console.error("CREATE LOCAL ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    console.error("❌ CREATE LOCAL ERROR:", error.message);
+    res.status(400).json({ message: error.message });
   }
-
-}
+};
 
 /* =========================================
    ACTUALIZAR LOCAL
 ========================================= */
 export const updateLocal = async (req, res) => {
-
   try {
-
-    const local = await localeService.getLocalById(req.params.id)
+    const { id } = req.params;
+    const local = await localeService.getLocalById(id);
 
     if (!local) {
-      return res.status(404).json({
-        message: "Local no encontrado"
-      })
+      return res.status(404).json({ message: "Local no encontrado" });
     }
 
-    if (
-      req.user.role === "ADMIN_CLIENTE" &&
-      local.company_id !== req.user.company_id
-    ) {
-      return res.status(403).json({
-        message: "Sin permisos"
-      })
+    if (req.user.role === "ADMIN_CLIENTE" && local.company_id !== req.user.company_id) {
+      return res.status(403).json({ message: "Sin permisos" });
     }
 
-    const updated = await localeService.updateLocal(
-      req.params.id,
-      req.body
-    )
-
-    res.json(updated)
+    const updated = await localeService.updateLocal(id, req.body);
+    res.json(updated);
 
   } catch (error) {
-
-    console.error("UPDATE LOCAL ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    console.error("❌ UPDATE LOCAL ERROR:", error.message);
+    res.status(400).json({ message: error.message });
   }
-
-}
+};
 
 /* =========================================
    TOGGLE LOCAL
 ========================================= */
 export const toggleLocal = async (req, res) => {
-
   try {
+    const local = await localeService.getLocalById(req.params.id);
 
-    const local = await localeService.getLocalById(req.params.id)
+    if (!local) return res.status(404).json({ message: "Local no encontrado" });
 
-    if (!local) {
-      return res.status(404).json({
-        message: "Local no encontrado"
-      })
+    if (req.user.role === "ADMIN_CLIENTE" && local.company_id !== req.user.company_id) {
+      return res.status(403).json({ message: "Sin permisos" });
     }
 
-    if (
-      req.user.role === "ADMIN_CLIENTE" &&
-      local.company_id !== req.user.company_id
-    ) {
-      return res.status(403).json({
-        message: "Sin permisos"
-      })
-    }
-
-    const updated = await localeService.toggleLocal(req.params.id)
-
-    res.json(updated)
+    const updated = await localeService.toggleLocal(req.params.id);
+    res.json(updated);
 
   } catch (error) {
-
-    console.error("TOGGLE LOCAL ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    res.status(400).json({ message: error.message });
   }
-
-}
+};
 
 /* =========================================
    ELIMINAR LOCAL
 ========================================= */
 export const deleteLocal = async (req, res) => {
-
   try {
+    const local = await localeService.getLocalById(req.params.id);
 
-    const local = await localeService.getLocalById(req.params.id)
+    if (!local) return res.status(404).json({ message: "Local no encontrado" });
 
-    if (!local) {
-      return res.status(404).json({
-        message: "Local no encontrado"
-      })
+    if (req.user.role === "ADMIN_CLIENTE" && local.company_id !== req.user.company_id) {
+      return res.status(403).json({ message: "Sin permisos" });
     }
 
-    if (
-      req.user.role === "ADMIN_CLIENTE" &&
-      local.company_id !== req.user.company_id
-    ) {
-      return res.status(403).json({
-        message: "Sin permisos"
-      })
-    }
-
-    await localeService.deleteLocal(req.params.id)
-
-    res.json({
-      message: "Local eliminado correctamente"
-    })
+    await localeService.deleteLocal(req.params.id);
+    res.json({ message: "Local eliminado correctamente" });
 
   } catch (error) {
-
-    console.error("DELETE LOCAL ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    res.status(400).json({ message: error.message });
   }
-
-}
+};
 
 /* =========================================
-   CARGA MASIVA EXCEL
+   CARGA MASIVA EXCEL (CORREGIDO Y MEJORADO)
 ========================================= */
 export const uploadLocales = async (req, res) => {
-
   try {
-
+    // 1. Validar archivo
     if (!req.file) {
-      return res.status(400).json({
-        message: "Archivo requerido"
-      })
+      return res.status(400).json({ message: "Archivo Excel requerido (.xlsx o .xls)" });
     }
 
-    let companyId = req.body.company_id
-
+    // 2. Definir ID de empresa
+    let companyId = req.body.company_id;
     if (req.user.role === "ADMIN_CLIENTE") {
-      companyId = req.user.company_id
+      companyId = req.user.company_id;
     }
 
+    if (!companyId) {
+      // Si falla, borramos el archivo para no dejar basura
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ message: "ID de empresa es obligatorio" });
+    }
+
+    // 🚩 3. LEER EL ARCHIVO DESDE EL DISCO
+    // Como usas diskStorage, el buffer de req.file es null. Debemos leer req.file.path.
+    const fileBuffer = fs.readFileSync(req.file.path);
+
+    // 4. Procesar en el servicio
     const result = await localeService.uploadLocalesFromExcel(
-      req.file.buffer,
+      fileBuffer,
       companyId
-    )
+    );
+
+    // 🚩 5. LIMPIEZA: Borrar archivo temporal después de procesarlo con éxito
+    if (fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
 
     res.json({
-      message: "Carga masiva completada",
+      message: "Carga masiva completada con éxito",
       ...result
-    })
+    });
 
   } catch (error) {
+    // 🚩 6. MANEJO DE ERRORES: Borrar archivo si algo falla en el proceso
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
 
-    console.error("UPLOAD LOCALES ERROR:", error)
-
-    res.status(400).json({
-      message: error.message
-    })
-
+    console.error("❌ UPLOAD LOCALES ERROR:", error.message);
+    res.status(400).json({ 
+      message: error.message || "Error al procesar el archivo Excel" 
+    });
   }
-
-}
+};
