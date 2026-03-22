@@ -10,8 +10,22 @@ import {
 
 const router = Router()
 
-router.get("/", auth, roleGuard("ROOT"), getCompanies)
+/**
+ * @route   GET /api/companies
+ * @desc    Obtener lista de todas las empresas (Solo ROOT)
+ * @access  Private (ROOT)
+ */
+router.get("/", 
+  auth, 
+  roleGuard("ROOT"), 
+  getCompanies
+)
 
+/**
+ * @route   POST /api/companies/with-admin
+ * @desc    Crear una nueva empresa junto con su primer usuario Administrador
+ * @access  Private (ROOT)
+ */
 router.post(
   "/with-admin",
   auth,
@@ -19,6 +33,11 @@ router.post(
   createCompanyWithAdmin
 )
 
+/**
+ * @route   PATCH /api/companies/:id/toggle
+ * @desc    Activar o desactivar una empresa (Bloquea acceso a todos sus usuarios)
+ * @access  Private (ROOT)
+ */
 router.patch(
   "/:id/toggle",
   auth,
