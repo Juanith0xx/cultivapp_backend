@@ -1,5 +1,6 @@
 import * as routeService from "./routes.service.js";
 import crypto from "crypto";
+import db from "../../database/db.js"; // 🚩 Asegúrate de tener este import para las consultas directas
 
 /**
  * Auxiliar: Cálculo de distancia entre dos puntos (Fórmula de Haversine)
@@ -77,11 +78,34 @@ export const getMyTasks = async (req, res) => {
 export const createRoute = async (req, res) => {
   try {
     const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? req.body.company_id : req.user.company_id;
+    const { 
+      user_id, local_id, start_time, 
+      visit_date, selectedDays, is_recurring 
+    } = req.body;
 
-    if (!company_id) return res.status(400).json({ message: "Falta company_id" });
+    // 🚩 MEJORA PARA ROOT: 
+    // Prioridad 1: company_id enviada desde el frontend
+    // Prioridad 2: company_id del token (si es admin)
+    let company_id = isRoot ? req.body.company_id : req.user.company_id;
 
-    const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
+    // 🚩 SI ES ROOT y no mandó company_id, la buscamos automáticamente por el local_id
+    if (isRoot && !company_id && local_id) {
+      const localRes = await db.query(
+        'SELECT company_id FROM public.locales WHERE id = $1', 
+        [local_id]
+      );
+      if (localRes.rows.length > 0) {
+        company_id = localRes.rows[0].company_id;
+      }
+    }
+
+    // Validación final: Si llegamos aquí sin company_id, damos error 400
+    if (!company_id) {
+      return res.status(400).json({ 
+        message: "No se pudo determinar la empresa. Por favor selecciona un local válido o indica la empresa." 
+      });
+    }
+
     let tasks = [];
 
     if (is_recurring && selectedDays?.length > 0) {
@@ -137,7 +161,6 @@ export const updateRoute = async (req, res) => {
 export const deleteRoute = async (req, res) => {
   try {
     const isRoot = req.user.role === 'ROOT';
-    // 🚩 IMPORTANTE: Si es ROOT permitimos borrar sin validar company_id del token
     const company_id = isRoot ? null : req.user.company_id;
     const result = await routeService.deleteRoute(company_id, req.params.id);
     res.json(result);

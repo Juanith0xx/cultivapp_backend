@@ -90,9 +90,10 @@ export const getRoutesByCompany = async (company_id) => {
     const query = `
       SELECT 
         ur.id, ur.status, ur.start_time, ur.visit_date, ur.is_recurring, ur.day_of_week,
-        ur.check_in, ur.lat_in, ur.lng_in, ur.is_valid_gps, ur.distance_meters,
-        u.first_name, u.last_name, u.rut as user_rut,
-        l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
+        ur.user_id,    -- 🚩 INDISPENSABLE
+        ur.company_id, -- 🚩 INDISPENSABLE para el ROOT
+        u.first_name, u.last_name,
+        l.id as local_id, l.cadena, l.direccion,
         c.name as comuna_name
       FROM public.user_routes ur
       JOIN public.users u ON ur.user_id = u.id
@@ -100,7 +101,7 @@ export const getRoutesByCompany = async (company_id) => {
       LEFT JOIN public.comunas c ON l.comuna_id = c.id
       WHERE ($1::uuid IS NULL OR ur.company_id = $1)
         AND ur.deleted_at IS NULL
-      ORDER BY ur.is_recurring DESC, ur.visit_date ASC, ur.start_time ASC;
+      ORDER BY ur.visit_date ASC;
     `;
     const result = await db.query(query, [company_id]);
     return result.rows;
