@@ -1,6 +1,7 @@
 import { Router } from "express"
 import auth from "../../middlewares/auth.js"
 import roleGuard from "../../middlewares/roleGuard.js"
+import upload from "../../middlewares/upload.js" 
 
 import {
   createRoute,      
@@ -10,14 +11,16 @@ import {
   checkIn,
   updateRoute,
   getMyTasks,
-  resetCheckIn // 🚩 Asegúrate de haber agregado esta función al controller
+  resetCheckIn,
+  saveVisitPhoto,
+  getLiveMonitoring, // 📍 Nueva mejora para el Mapa
+  finishVisit        // ✅ Nueva mejora para cerrar visita
 } from "./routes.controller.js"
 
 const router = Router()
 
 /* =========================================================
    1. RUTAS ESTÁTICAS (Sin parámetros :id)
-   Deben ir primero para evitar colisiones.
 ========================================================= */
 
 // Mi agenda (Mercaderista / ROOT para pruebas)
@@ -28,7 +31,16 @@ router.get(
   getMyTasks
 )
 
-// Listado general de rutas (Filtro por empresa o total si es ROOT)
+// 📍 NUEVO: Monitoreo GPS en tiempo real (Para el mapa del Admin)
+// Nota: En el frontend llamar como: api.get("/routes/monitoring/live")
+router.get(
+  "/monitoring/live",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  getLiveMonitoring
+)
+
+// Listado general de rutas
 router.get(
   "/", 
   auth, 
@@ -36,7 +48,7 @@ router.get(
   getRoutes
 )
 
-// Crear ruta (Individual o Masiva)
+// Crear ruta
 router.post(
   "/", 
   auth, 
@@ -48,7 +60,7 @@ router.post(
    2. RUTAS DINÁMICAS ESPECÍFICAS
 ========================================================= */
 
-// Rutas por usuario específico (Para la planificación en el Dashboard)
+// Rutas por usuario específico
 router.get(
   "/user/:userId", 
   auth, 
@@ -56,7 +68,7 @@ router.get(
   getRoutesByUser
 )
 
-// 🔄 NUEVO: Resetear visita a PENDIENTE (Para tus pruebas de una sola línea)
+// Resetear visita a PENDIENTE
 router.post(
   "/:id/reset-check-in",
   auth,
@@ -65,10 +77,27 @@ router.post(
 )
 
 /* =========================================================
-   3. OPERACIONES POR ID
+   3. OPERACIONES POR ID Y EVIDENCIAS
 ========================================================= */
 
-// Check-in con GPS (Permitimos ROOT para que tú puedas testear el flujo)
+// 📸 Subir evidencia fotográfica
+router.post(
+  "/photos", 
+  auth, 
+  roleGuard("USUARIO", "ROOT"), 
+  upload.single("photo"), 
+  saveVisitPhoto
+)
+
+// ✅ NUEVO: Finalizar visita (Check-out)
+router.post(
+  "/:id/finish",
+  auth,
+  roleGuard("USUARIO", "ROOT"),
+  finishVisit
+)
+
+// Check-in con GPS
 router.post(
   "/:id/check-in", 
   auth, 
@@ -76,7 +105,7 @@ router.post(
   checkIn
 )
 
-// Editar una ruta o grupo (ROOT incluido para evitar 401)
+// Editar una ruta
 router.put(
   "/:id", 
   auth, 
@@ -84,7 +113,7 @@ router.put(
   updateRoute
 )
 
-// Eliminar ruta o grupo (🚩 FIX: ROOT ahora tiene permiso explícito)
+// Eliminar ruta
 router.delete(
   "/:id", 
   auth, 

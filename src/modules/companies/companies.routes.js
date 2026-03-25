@@ -12,12 +12,13 @@ const router = Router()
 
 /**
  * @route   GET /api/companies
- * @desc    Obtener lista de todas las empresas (Solo ROOT)
- * @access  Private (ROOT)
+ * @desc    Obtener lista de empresas (ROOT ve todas, ADMIN_CLIENTE ve la suya)
+ * @access  Private (ROOT, ADMIN_CLIENTE)
  */
 router.get("/", 
   auth, 
-  roleGuard("ROOT"), 
+  // CAMBIO AQUÍ: Permitimos que ADMIN_CLIENTE también entre a esta ruta
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
   getCompanies
 )
 
@@ -29,19 +30,19 @@ router.get("/",
 router.post(
   "/with-admin",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT"), // Este se queda solo para ROOT por seguridad
   createCompanyWithAdmin
 )
 
 /**
  * @route   PATCH /api/companies/:id/toggle
- * @desc    Activar o desactivar una empresa (Bloquea acceso a todos sus usuarios)
+ * @desc    Activar o desactivar una empresa
  * @access  Private (ROOT)
  */
 router.patch(
   "/:id/toggle",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT"), // Este también solo para ROOT
   toggleCompany
 )
 
