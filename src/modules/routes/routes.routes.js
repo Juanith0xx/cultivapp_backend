@@ -9,17 +9,18 @@ import {
   deleteRoute,
   checkIn,
   updateRoute,
-  getMyTasks
+  getMyTasks,
+  resetCheckIn // 🚩 Asegúrate de haber agregado esta función al controller
 } from "./routes.controller.js"
 
 const router = Router()
 
 /* =========================================================
-   RUTAS DE GESTIÓN (ROOT y ADMIN)
-   IMPORTANTE: Las rutas estáticas van SIEMPRE antes que las dinámicas (:id)
+   1. RUTAS ESTÁTICAS (Sin parámetros :id)
+   Deben ir primero para evitar colisiones.
 ========================================================= */
 
-// 🟢 GET: Mi agenda (Mercaderista) - La subimos para que no choque con /:id
+// Mi agenda (Mercaderista / ROOT para pruebas)
 router.get(
   "/my-tasks", 
   auth, 
@@ -27,15 +28,27 @@ router.get(
   getMyTasks
 )
 
-// 🟢 POST: Crear ruta (Individual o Masiva)
-// Definimos ambas para asegurar que el Frontend nunca dé 404
-router.post("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
-router.post("/bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), createRoute)
+// Listado general de rutas (Filtro por empresa o total si es ROOT)
+router.get(
+  "/", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  getRoutes
+)
 
-// 🟢 GET: Listado general
-router.get("/", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getRoutes)
+// Crear ruta (Individual o Masiva)
+router.post(
+  "/", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  createRoute
+)
 
-// 🟢 GET: Rutas por usuario específico
+/* =========================================================
+   2. RUTAS DINÁMICAS ESPECÍFICAS
+========================================================= */
+
+// Rutas por usuario específico (Para la planificación en el Dashboard)
 router.get(
   "/user/:userId", 
   auth, 
@@ -43,23 +56,40 @@ router.get(
   getRoutesByUser
 )
 
+// 🔄 NUEVO: Resetear visita a PENDIENTE (Para tus pruebas de una sola línea)
+router.post(
+  "/:id/reset-check-in",
+  auth,
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  resetCheckIn
+)
+
 /* =========================================================
-   RUTAS DINÁMICAS (Contienen parámetros :id)
-   Se dejan al final para evitar que atrapen peticiones de rutas estáticas
+   3. OPERACIONES POR ID
 ========================================================= */
 
-// Check-in con GPS
+// Check-in con GPS (Permitimos ROOT para que tú puedas testear el flujo)
 router.post(
   "/:id/check-in", 
   auth, 
-  roleGuard("USUARIO"), 
+  roleGuard("USUARIO", "ROOT"), 
   checkIn
 )
 
-// Editar una ruta o grupo
-router.put("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), updateRoute)
+// Editar una ruta o grupo (ROOT incluido para evitar 401)
+router.put(
+  "/:id", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  updateRoute
+)
 
-// Eliminar ruta o grupo
-router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteRoute)
+// Eliminar ruta o grupo (🚩 FIX: ROOT ahora tiene permiso explícito)
+router.delete(
+  "/:id", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  deleteRoute
+)
 
 export default router

@@ -2,6 +2,7 @@ import db from "../../database/db.js";
 
 /* =========================================================
    OBTENER RUTAS POR USUARIO Y FECHA (Timeline del Reponedor)
+   🚩 MEJORA: Filtro de company_id opcional para ROOT
 ========================================================= */
 export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
   try {
@@ -16,8 +17,8 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
       JOIN public.locales l ON ur.local_id = l.id
       LEFT JOIN public.comunas c ON l.comuna_id = c.id
       JOIN public.users u ON ur.user_id = u.id
-      WHERE ur.company_id = $1 
-        AND ur.user_id = $2
+      WHERE ur.user_id = $2
+        AND ($1::uuid IS NULL OR ur.company_id = $1)
         AND ur.deleted_at IS NULL
         AND (
           (ur.is_recurring = false AND ur.visit_date::date = $3::date)
@@ -36,7 +37,6 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
 
 /* =========================================================
    OBTENER RUTAS POR USUARIO (VISTA PLANIFICACIÓN ADMIN/ROOT)
-   🚩 MEJORA: Soporte para ROOT (company_id opcional)
 ========================================================= */
 export const getRoutesByUser = async (company_id, user_id) => {
   try {
@@ -74,7 +74,7 @@ export const registerCheckInWithGps = async (data) => {
        lat_in = $1, lng_in = $2,
        distance_meters = $3, is_valid_gps = $4,
        updated_at = NOW()
-     WHERE id = $5 AND company_id = $6
+     WHERE id = $5 AND ($6::uuid IS NULL OR company_id = $6)
      RETURNING *`,
     [lat_in, lng_in, distance_meters, is_valid_gps, id, company_id]
   );
@@ -84,7 +84,6 @@ export const registerCheckInWithGps = async (data) => {
 
 /* =========================================================
    OBTENER RUTAS POR EMPRESA (VISTA ADMINISTRADOR)
-   🚩 MEJORA: Soporte para ROOT (company_id opcional)
 ========================================================= */
 export const getRoutesByCompany = async (company_id) => {
   try {
@@ -119,7 +118,7 @@ export const getRouteDetail = async (id, company_id) => {
     `SELECT ur.*, l.lat as local_lat, l.lng as local_lng 
      FROM public.user_routes ur
      JOIN public.locales l ON ur.local_id = l.id
-     WHERE ur.id = $1 AND ur.company_id = $2`,
+     WHERE ur.id = $1 AND ($2::uuid IS NULL OR ur.company_id = $2)`,
     [id, company_id]
   );
   return result.rows[0];
@@ -195,7 +194,7 @@ export const updateRoute = async (id, data) => {
   const groupId = routeInfo.rows[0]?.schedule_group_id;
 
   if (groupId && routeInfo.rows[0]?.is_recurring) {
-    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND company_id = $2`, [groupId, company_id]);
+    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [groupId, company_id]);
     
     const tasks = [{
       company_id, user_id, local_id, visit_date: null, start_time,
@@ -207,7 +206,7 @@ export const updateRoute = async (id, data) => {
   } else {
     const result = await db.query(
       `UPDATE public.user_routes SET user_id = $1, local_id = $2, start_time = $3, visit_date = $4, updated_at = NOW()
-       WHERE id = $5 AND company_id = $6 RETURNING *`,
+       WHERE id = $5 AND ($6::uuid IS NULL OR company_id = $6) RETURNING *`,
       [user_id, local_id, start_time, visit_date || null, id, company_id]
     );
     return result.rows[0];
@@ -215,17 +214,47 @@ export const updateRoute = async (id, data) => {
 };
 
 export const deleteRoute = async (company_id, route_id) => {
-  const routeInfo = await db.query(`SELECT schedule_group_id FROM public.user_routes WHERE id = $1 AND company_id = $2`, [route_id, company_id]);
+  const routeInfo = await db.query(`SELECT schedule_group_id FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [route_id, company_id]);
   
   if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
   
   const groupId = routeInfo.rows[0]?.schedule_group_id;
   
   if (groupId) {
-    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND company_id = $2`, [groupId, company_id]);
+    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [groupId, company_id]);
   } else {
-    const result = await db.query(`DELETE FROM public.user_routes WHERE id = $1 AND company_id = $2 RETURNING id`, [route_id, company_id]);
+    const result = await db.query(`DELETE FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2) RETURNING id`, [route_id, company_id]);
     if (result.rows.length === 0) throw new Error("Ruta no encontrada");
   }
   return { message: "Planificación eliminada" };
+};
+
+/* =========================================================
+   🔄 REVERTIR RUTA A PENDIENTE (SOPORTE ROOT)
+========================================================= */
+export const resetRouteStatus = async (id, company_id) => {
+  try {
+    const query = `
+      UPDATE public.user_routes 
+      SET 
+        status = 'PENDING', 
+        check_in = NULL, 
+        lat_in = NULL, 
+        lng_in = NULL,
+        distance_meters = NULL,
+        is_valid_gps = false,
+        updated_at = NOW()
+      WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)
+      RETURNING *;
+    `;
+    const { rows } = await db.query(query, [id, company_id]);
+
+    // También limpiamos la tabla de visitas técnicas
+    await db.query(`DELETE FROM public.visits WHERE route_id = $1`, [id]);
+
+    return rows[0];
+  } catch (error) {
+    console.error("❌ Error en resetRouteStatus Service:", error.message);
+    throw error;
+  }
 };

@@ -23,7 +23,8 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
 export const checkIn = async (req, res) => {
   try {
-    const company_id = req.user.company_id;
+    const isRoot = req.user.role === 'ROOT';
+    const company_id = isRoot ? (req.body.company_id || null) : req.user.company_id;
     const { id } = req.params; 
     const { lat_in, lng_in } = req.body; 
 
@@ -56,8 +57,12 @@ export const checkIn = async (req, res) => {
 
 export const getMyTasks = async (req, res) => {
   try {
+    const isRoot = req.user.role === 'ROOT';
+    const user_id = isRoot ? (req.query.userId || req.user.id) : req.user.id;
+    const company_id = isRoot ? null : req.user.company_id;
+    
     const tasks = await routeService.getRoutesByUserAndDate(
-      req.user.company_id, req.user.id, req.query.date || new Date().toISOString().split('T')[0]
+      company_id, user_id, req.query.date || new Date().toISOString().split('T')[0]
     );
     res.json(tasks || []);
   } catch (error) {
@@ -118,7 +123,6 @@ export const getRoutesByUser = async (req, res) => {
   }
 };
 
-// 🚩 AQUÍ ESTABA EL ERROR: Faltaba el export
 export const updateRoute = async (req, res) => {
   try {
     const isRoot = req.user.role === 'ROOT';
@@ -133,9 +137,26 @@ export const updateRoute = async (req, res) => {
 export const deleteRoute = async (req, res) => {
   try {
     const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? (req.body.company_id || null) : req.user.company_id;
+    // 🚩 IMPORTANTE: Si es ROOT permitimos borrar sin validar company_id del token
+    const company_id = isRoot ? null : req.user.company_id;
     const result = await routeService.deleteRoute(company_id, req.params.id);
     res.json(result);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+/* =========================================================
+   🔄 REVERTIR A PENDIENTE (NUEVA MEJORA)
+========================================================= */
+export const resetCheckIn = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isRoot = req.user.role === 'ROOT';
+    const company_id = isRoot ? null : req.user.company_id;
+
+    const result = await routeService.resetRouteStatus(id, company_id);
+    res.json({ success: true, message: "Ruta reseteada a pendiente", data: result });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
