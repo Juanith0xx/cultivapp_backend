@@ -24,15 +24,14 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
 export const checkIn = async (req, res) => {
   try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? (req.body.company_id || req.user.company_id) : req.user.company_id;
-    const { id } = req.params; 
-    const { lat_in, lng_in } = req.body; 
+    const { id } = req.params;
+    const { lat_in, lng_in } = req.body;
+    const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
 
     if (!lat_in || !lng_in) return res.status(400).json({ message: "GPS incompleto" });
 
     const route = await routeService.getRouteDetail(id, company_id);
-    if (!route) return res.status(404).json({ message: "Ruta no encontrada" });
+    if (!route) return res.status(404).json({ message: "Ruta no encontrada." });
 
     const distance = calculateDistance(
       parseFloat(lat_in), parseFloat(lng_in), 
@@ -40,56 +39,50 @@ export const checkIn = async (req, res) => {
     );
 
     const isValidGps = distance <= 3000; 
-
     const result = await routeService.registerCheckInWithGps({
       id, company_id, lat_in: parseFloat(lat_in), lng_in: parseFloat(lng_in),
       distance_meters: Math.round(distance), is_valid_gps: isValidGps
     });
 
-    if (!isValidGps) {
-      return res.status(400).json({ isValid: false, message: `Fuera de rango (${Math.round(distance)}m)` });
-    }
-
-    res.json({ isValid: true, message: "Check-in exitoso", data: result });
+    res.json({ isValid: isValidGps, message: isValidGps ? "Check-in exitoso" : `Fuera de rango (${Math.round(distance)}m)`, data: result });
   } catch (error) {
     res.status(400).json({ message: error.message });
-  }
-};
-
-export const getMyTasks = async (req, res) => {
-  try {
-    const isRoot = req.user.role === 'ROOT';
-    const user_id = isRoot ? (req.query.userId || req.user.id) : req.user.id;
-    const company_id = isRoot ? null : req.user.company_id;
-    
-    const tasks = await routeService.getRoutesByUserAndDate(
-      company_id, user_id, req.query.date || new Date().toISOString().split('T')[0]
-    );
-    res.json(tasks || []);
-  } catch (error) {
-    res.status(400).json({ message: "Error agenda" });
   }
 };
 
 export const finishVisit = async (req, res) => {
   try {
     const { id } = req.params;
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? null : req.user.company_id;
+    const { company_id, role } = req.user;
+    const isRoot = role === 'ROOT';
 
     const query = `
       UPDATE public.user_routes 
       SET status = 'COMPLETED', check_out = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 ${company_id ? 'AND company_id = $2' : ''}
+      WHERE id = $1 ${!isRoot ? 'AND company_id = $2' : ''}
       RETURNING *;
     `;
-    const params = company_id ? [id, company_id] : [id];
+    const params = !isRoot ? [id, company_id] : [id];
     const result = await db.query(query, params);
 
-    if (result.rowCount === 0) return res.status(404).json({ message: "Error al finalizar" });
+    if (result.rowCount === 0) return res.status(404).json({ message: "No autorizado o ruta inexistente" });
     res.json({ success: true, message: "Visita finalizada", data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const getMyTasks = async (req, res) => {
+  try {
+    const { id: user_id, company_id, role } = req.user;
+    const date = req.query.date || new Date().toISOString().split('T')[0];
+    const targetUserId = (role === 'ROOT' && req.query.userId) ? req.query.userId : user_id;
+    const targetCompanyId = role === 'ROOT' ? null : company_id;
+
+    const tasks = await routeService.getRoutesByUserAndDate(targetCompanyId, targetUserId, date);
+    res.json(tasks || []);
+  } catch (error) {
+    res.status(400).json({ message: "Error al obtener agenda" });
   }
 };
 
@@ -99,16 +92,10 @@ export const finishVisit = async (req, res) => {
 
 export const createRoute = async (req, res) => {
   try {
-    const isRoot = req.user.role === 'ROOT';
     const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
-    let company_id = isRoot ? req.body.company_id : req.user.company_id;
+    const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
 
-    if (isRoot && !company_id && local_id) {
-      const localRes = await db.query('SELECT company_id FROM public.locales WHERE id = $1', [local_id]);
-      if (localRes.rows.length > 0) company_id = localRes.rows[0].company_id;
-    }
-
-    if (!company_id) return res.status(400).json({ message: "Empresa no determinada." });
+    if (!company_id) return res.status(400).json({ message: "Empresa requerida" });
 
     let tasks = [];
     if (is_recurring && selectedDays?.length > 0) {
@@ -130,9 +117,9 @@ export const createRoute = async (req, res) => {
 
 export const getRoutes = async (req, res) => {
   try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? (req.query.company_id || null) : req.user.company_id;
-    const routes = await routeService.getRoutesByCompany(company_id);
+    const { company_id, role } = req.user;
+    const filterCompany = role === 'ROOT' ? (req.query.company_id || null) : company_id;
+    const routes = await routeService.getRoutesByCompany(filterCompany);
     res.json(routes || []);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -141,12 +128,39 @@ export const getRoutes = async (req, res) => {
 
 export const getRoutesByUser = async (req, res) => {
   try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? null : req.user.company_id;
-    const routes = await routeService.getRoutesByUser(company_id, req.params.userId);
+    const { company_id, role } = req.user;
+    const filterCompany = role === 'ROOT' ? null : company_id;
+    const routes = await routeService.getRoutesByUser(filterCompany, req.params.userId);
     res.json(routes || []);
   } catch (error) {
     res.status(400).json({ message: error.message });
+  }
+};
+
+export const updateRoute = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { company_id, role } = req.user;
+    const isRoot = role === 'ROOT';
+    
+    const result = await routeService.updateRoute(id, { 
+      ...req.body, 
+      company_id: isRoot ? (req.body.company_id || null) : company_id 
+    });
+    res.json({ data: result });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+export const deleteRoute = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { company_id, role } = req.user;
+    const result = await routeService.deleteRoute(role === 'ROOT' ? null : company_id, id);
+    res.json({ success: true, message: "Ruta eliminada", result });
+  } catch (error) {
+    res.status(400).json({ message: "Error al eliminar" });
   }
 };
 
@@ -154,7 +168,6 @@ export const getRoutesByUser = async (req, res) => {
    📸 EVIDENCIAS Y MONITOREO GPS
 ========================================================= */
 
-// 🚩 ESTA ES LA FUNCIÓN QUE NODE NO ENCONTRABA
 export const saveVisitPhoto = async (req, res) => {
   try {
     const { visit_id } = req.body; 
@@ -164,16 +177,16 @@ export const saveVisitPhoto = async (req, res) => {
     const result = await db.query(query, [visit_id, imageUrl]);
     res.status(201).json({ success: true, photo: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: "Error al guardar evidencia" });
   }
 };
 
 export const getLiveMonitoring = async (req, res) => {
   try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? null : req.user.company_id;
+    const { company_id, role } = req.user;
+    const isRoot = role === 'ROOT';
+    const filterCompany = isRoot ? (req.query.company_id || null) : company_id;
 
-    // 🚩 CAMBIO: Usamos l.cadena para evitar el error "column l.nombre does not exist"
     const query = `
       SELECT 
         u.id as user_id, u.first_name, u.last_name, 
@@ -185,23 +198,18 @@ export const getLiveMonitoring = async (req, res) => {
       LEFT JOIN public.locales l ON r.local_id = l.id
       WHERE r.status = 'IN_PROGRESS' 
       AND r.lat_in IS NOT NULL
-      ${company_id ? 'AND r.company_id = $1' : ''}
+      ${filterCompany ? 'AND r.company_id = $1' : ''}
       ORDER BY r.check_in DESC
     `;
 
-    const params = company_id ? [company_id] : [];
+    const params = filterCompany ? [filterCompany] : [];
     const result = await db.query(query, params);
-
     const data = result.rows.map(row => ({
-      ...row, 
-      lat_in: parseFloat(row.lat_in), 
-      lng_in: parseFloat(row.lng_in)
+      ...row, lat_in: parseFloat(row.lat_in), lng_in: parseFloat(row.lng_in)
     }));
-
     res.json(data);
   } catch (error) {
-    console.error("❌ ERROR EN MONITOREO:", error.message);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: "Error en monitoreo multi-tenant" });
   }
 };
 
@@ -212,32 +220,11 @@ export const getLiveMonitoring = async (req, res) => {
 export const resetCheckIn = async (req, res) => {
   try {
     const { id } = req.params;
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? null : req.user.company_id;
-    const result = await routeService.resetRouteStatus(id, company_id);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
+    const { company_id, role } = req.user;
+    const targetCompanyId = role === 'ROOT' ? null : company_id;
 
-export const updateRoute = async (req, res) => {
-  try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? (req.body.company_id || null) : req.user.company_id;
-    const result = await routeService.updateRoute(req.params.id, { ...req.body, company_id });
-    res.json({ data: result });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
-export const deleteRoute = async (req, res) => {
-  try {
-    const isRoot = req.user.role === 'ROOT';
-    const company_id = isRoot ? null : req.user.company_id;
-    const result = await routeService.deleteRoute(company_id, req.params.id);
-    res.json(result);
+    const result = await routeService.resetRouteStatus(id, targetCompanyId);
+    res.json({ success: true, message: "Ruta reseteada", data: result });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }

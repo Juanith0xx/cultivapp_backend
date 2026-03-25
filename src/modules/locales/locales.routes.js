@@ -16,63 +16,54 @@ import {
 const router = Router()
 
 /* =========================================
-   MIDDLEWARE GLOBAL DEL MODULO
+   MIDDLEWARE DE AUTENTICACIÓN (Obligatorio para todos)
 ========================================= */
-
 router.use(auth)
-router.use(roleGuard("ROOT", "ADMIN_CLIENTE"))
 
 /* =========================================
-   OBTENER LOCALES
+   OBTENER LOCALES 
+   (🔓 Quitamos el roleGuard global para que el USUARIO pueda verlos)
 ========================================= */
-
 router.get(
   "/",
   getLocales
 )
 
 /* =========================================
-   CREAR LOCAL
+   ACCIONES PROTEGIDAS 
+   (🔒 Solo ROOT y ADMIN_CLIENTE pueden modificar)
 ========================================= */
 
 router.post(
   "/",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   createLocal
 )
 
-/* =========================================
-   ACTUALIZAR LOCAL
-========================================= */
-
 router.put(
   "/:id",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   updateLocal
 )
 
-/* =========================================
-   TOGGLE LOCAL
-========================================= */
-
 router.patch(
   "/:id/toggle",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   toggleLocal
 )
 
-/* =========================================
-   ELIMINAR LOCAL
-========================================= */
-
 router.delete(
   "/:id",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   deleteLocal
 )
 
 /* =========================================
    CARGA MASIVA EXCEL
 ========================================= */
-
 router.post(
   "/upload",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   upload.single("file"),
   uploadLocales
 )
