@@ -2,7 +2,6 @@ import jwt from "jsonwebtoken"
 import pool from "../database/db.js"
 
 const authMiddleware = async (req, res, next) => {
-
   const authHeader = req.headers.authorization
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -12,16 +11,16 @@ const authMiddleware = async (req, res, next) => {
   const token = authHeader.split(" ")[1]
 
   try {
-
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
-    // 🔎 Validar usuario + sesión + soft delete
+    // 🔎 1. Traemos el company_id real de la base de datos
     const result = await pool.query(
       `
-      SELECT session_id, is_active, deleted_at
-      FROM users
-      WHERE id = $1
-      `,
+    SELECT u.session_id, u.is_active, u.deleted_at, u.company_id, u.role, c.name as company_name
+    FROM users u
+    JOIN companies c ON u.company_id = c.id
+    WHERE u.id = $1
+  `,  
       [decoded.id]
     )
 
@@ -31,27 +30,26 @@ const authMiddleware = async (req, res, next) => {
 
     const user = result.rows[0]
 
-    // 🔥 Validar soft delete
-    if (user.deleted_at) {
-      return res.status(401).json({ message: "Usuario eliminado" })
-    }
-
-    // 🔥 Validar estado activo
-    if (!user.is_active) {
-      return res.status(401).json({ message: "Cuenta deshabilitada" })
-    }
-
-    // 🔥 Validar sesión activa
+    // 🔥 Validaciones de seguridad
+    if (user.deleted_at) return res.status(401).json({ message: "Usuario eliminado" })
+    if (!user.is_active) return res.status(401).json({ message: "Cuenta deshabilitada" })
     if (!user.session_id || user.session_id !== decoded.session_id) {
-      return res.status(401).json({
-        message: "Sesión cerrada por inicio en otro dispositivo"
-      })
+      return res.status(401).json({ message: "Sesión cerrada por inicio en otro dispositivo" })
     }
 
-    req.user = decoded
+    // 🚩 2. Inyectamos los datos REALES y ACTUALIZADOS en req.user
+    // Esto asegura que company_id siempre esté disponible para Multer y los controladores
+    req.user = {
+      ...decoded, // Mantenemos lo que venía en el token (id, email, etc)
+      company_id: user.company_id, // Forzamos el UUID real de la DB
+      company_name: user.company_name,
+      role: user.role
+    }
+
     next()
 
   } catch (error) {
+    console.error("Error en Auth Middleware:", error)
     return res.status(401).json({ message: "Token inválido" })
   }
 }

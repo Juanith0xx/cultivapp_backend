@@ -13,8 +13,8 @@ import {
   getMyTasks,
   resetCheckIn,
   saveVisitPhoto,
-  getLiveMonitoring, // 📍 Nueva mejora para el Mapa
-  finishVisit        // ✅ Nueva mejora para cerrar visita
+  getLiveMonitoring, 
+  finishVisit        
 } from "./routes.controller.js"
 
 const router = Router()
@@ -31,8 +31,7 @@ router.get(
   getMyTasks
 )
 
-// 📍 NUEVO: Monitoreo GPS en tiempo real (Para el mapa del Admin)
-// Nota: En el frontend llamar como: api.get("/routes/monitoring/live")
+// 📍 Monitoreo GPS en tiempo real (Para el mapa del Admin)
 router.get(
   "/monitoring/live",
   auth,
@@ -80,16 +79,21 @@ router.post(
    3. OPERACIONES POR ID Y EVIDENCIAS
 ========================================================= */
 
-// 📸 Subir evidencia fotográfica
+/**
+ * 📸 EVIDENCIA FOTOGRÁFICA (MEJORADA PARA SAAS)
+ * URL: POST /api/routes/:id/photo
+ * Se cambió 'photo' por ':id/photo' para identificar la visita en la URL
+ * Se cambió upload.single("photo") por upload.single("foto") para coincidir con el Frontend
+ */
 router.post(
-  "/photos", 
+  "/:id/photo", 
   auth, 
   roleGuard("USUARIO", "ROOT"), 
-  upload.single("photo"), 
+  upload.single("foto"), 
   saveVisitPhoto
 )
 
-// ✅ NUEVO: Finalizar visita (Check-out)
+// ✅ Finalizar visita (Check-out)
 router.post(
   "/:id/finish",
   auth,

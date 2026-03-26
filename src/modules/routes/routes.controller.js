@@ -165,19 +165,54 @@ export const deleteRoute = async (req, res) => {
 };
 
 /* =========================================================
-   📸 EVIDENCIAS Y MONITOREO GPS
+   📸 EVIDENCIAS Y MONITOREO GPS (MEJORADO SAAS)
 ========================================================= */
 
 export const saveVisitPhoto = async (req, res) => {
   try {
-    const { visit_id } = req.body; 
-    if (!req.file) return res.status(400).json({ message: "No se recibió imagen." });
-    const imageUrl = `/uploads/visits/${req.file.filename}`;
-    const query = `INSERT INTO public.visit_photos (visit_id, image_url) VALUES ($1, $2) RETURNING *;`;
-    const result = await db.query(query, [visit_id, imageUrl]);
-    res.status(201).json({ success: true, photo: result.rows[0] });
+    const routeId = req.params.id || req.body.visit_id; 
+    const { tipo_evidencia } = req.body;
+    
+    // 🚩 IMPORTANTE: Usamos el ID (UUID) para la base de datos
+    // Esto evita el error de "invalid input syntax for type integer"
+    const companyId = req.user.company_id; 
+
+    if (!req.file) {
+      return res.status(400).json({ message: "No se recibió imagen o formato inválido." });
+    }
+
+    const filePath = req.file.path.replace(/\\/g, "/"); 
+
+    const query = `
+      INSERT INTO public.visit_photos (
+        visit_id, 
+        company_id, 
+        image_url, 
+        evidence_type, 
+        created_at
+      ) 
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
+      RETURNING *;
+    `;
+    
+    // Pasamos el companyId tal como viene (UUID) porque ya arreglamos la tabla
+    const params = [
+      routeId, 
+      companyId, 
+      filePath, 
+      tipo_evidencia || 'otros'
+    ];
+
+    const result = await db.query(query, params);
+
+    res.status(201).json({ 
+      success: true, 
+      message: "Evidencia guardada exitosamente",
+      photo: result.rows[0] 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error al guardar evidencia" });
+    console.error("❌ ERROR EN SAVE_VISIT_PHOTO:", error.message);
+    res.status(500).json({ message: "Error al guardar evidencia: " + error.message });
   }
 };
 
