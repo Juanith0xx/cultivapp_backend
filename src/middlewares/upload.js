@@ -4,10 +4,15 @@ import fs from "fs"
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
+    // 1. Obtener nombre de empresa (del token)
     const companyName = req.user?.company_name || "default_tenant";
     
-    // Sanitización del nombre de la empresa para la carpeta
-    const safeName = companyName
+    // 2. Obtener nombre de usuario (enviado desde el modal en el req.body)
+    // Usamos el body si viene, si no, el del token, o un default.
+    const rawUserName = req.body.user_full_name || req.user?.full_name || "usuario_desconocido";
+
+    // Función para limpiar nombres (quitar tildes, espacios, etc)
+    const slugify = (text) => text
       .toLowerCase()
       .trim()
       .normalize("NFD")
@@ -15,16 +20,20 @@ const storage = multer.diskStorage({
       .replace(/\s+/g, "_")
       .replace(/[^a-z0-9_]/g, "");
 
-    let folder = `uploads/${safeName}/`;
+    const safeCompany = slugify(companyName);
+    const safeUser = slugify(rawUserName);
 
+    let folder = `uploads/${safeCompany}/`;
+
+    // 🚩 MEJORA: Estructura específica para ACHS
     if (file.fieldname === "documento_achs") {
-      folder += "documentos/ACHS/";
+      folder += `doc_achs/${safeUser}/`;
     } 
     else if (file.fieldname === "file") { 
       folder += "excels_temporales/"; 
     } 
     else if (file.fieldname === "foto") { 
-      const tipo = req.body.tipo_evidencia || "otros";
+      const tipo = req.body.tipo_evidencia || "perfiles";
       const mapeoCarpetas = {
         'fachada': 'foto_local',
         'gondola_inicio': 'foto_gondola',
@@ -32,7 +41,13 @@ const storage = multer.diskStorage({
         'observaciones': 'observaciones'
       };
       const subCarpeta = mapeoCarpetas[tipo] || "otros";
-      folder += `evidencias/${subCarpeta}/`;
+      
+      // Si es foto de perfil, también la metemos en la carpeta del usuario
+      if (tipo === "perfiles") {
+        folder += `perfiles/${safeUser}/`;
+      } else {
+        folder += `evidencias/${subCarpeta}/`;
+      }
     }
 
     if (!fs.existsSync(folder)) {
@@ -42,24 +57,20 @@ const storage = multer.diskStorage({
     cb(null, folder);
   },
   filename: (req, file, cb) => {
-    // 🚩 MEJORA DE AUDITORÍA: Fecha y Hora legible
-    const routeId = req.params.id || "sin_ruta";
-    
+    const ext = path.extname(file.originalname);
     const ahora = new Date();
-    
-    // Formato: 2026-03-25
     const fecha = ahora.toISOString().split('T')[0]; 
-    
-    // Formato: 21h45 (Hora local del servidor)
     const hora = ahora.getHours().toString().padStart(2, '0') + "h" + 
                  ahora.getMinutes().toString().padStart(2, '0');
 
-    // Mantenemos un sufijo aleatorio pequeño por si se suben 2 fotos en el mismo minuto
-    const random = Math.round(Math.random() * 1e3);
-    const ext = path.extname(file.originalname);
-    
-    // Ejemplo: visita_a538..._2026-03-25_21h45_842.png
-    cb(null, `visita_${routeId}_${fecha}_${hora}_${random}${ext}`);
+    // Si es ACHS, le damos un nombre más profesional
+    if (file.fieldname === "documento_achs") {
+      cb(null, `ACHS_${fecha}_${hora}${ext}`);
+    } else {
+      const routeId = req.params.id || "sin_ruta";
+      const random = Math.round(Math.random() * 1e3);
+      cb(null, `visita_${routeId}_${fecha}_${hora}_${random}${ext}`);
+    }
   }
 })
 
@@ -80,14 +91,14 @@ const fileFilter = (req, file, cb) => {
     else cb(new Error("Debe ser una imagen válida"), false);
   }
   else {
-    cb(new Error("Campo no reconocido"), false);
+    cb(null, true); // Permitir otros campos si es necesario
   }
 }
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 }, // Aumentado a 15MB por los PDFs
 })
 
 export default upload;

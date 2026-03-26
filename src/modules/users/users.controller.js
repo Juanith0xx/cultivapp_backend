@@ -29,9 +29,14 @@ export const createUser = async (req, res) => {
     const loggedUser = req.user;
     let payload = { ...req.body };
 
+    // 🚩 MEJORA: Usamos el path generado dinámicamente por upload.js
     if (req.files) {
-      if (req.files.foto) payload.foto_url = `/uploads/${req.files.foto[0].filename}`;
-      if (req.files.documento_achs) payload.achs_url = `/uploads/ACHS/${req.files.documento_achs[0].filename}`;
+      if (req.files.foto) {
+        payload.foto_url = `/${req.files.foto[0].path.replace(/\\/g, "/")}`;
+      }
+      if (req.files.documento_achs) {
+        payload.achs_url = `/${req.files.documento_achs[0].path.replace(/\\/g, "/")}`;
+      }
     }
 
     if (loggedUser.role === "ADMIN_CLIENTE") {
@@ -65,9 +70,15 @@ export const updateUser = async (req, res) => {
     }
 
     let payload = { ...req.body };
+
+    // 🚩 MEJORA: Usamos el path generado dinámicamente por upload.js
     if (req.files) {
-      if (req.files.foto) payload.foto_url = `/uploads/${req.files.foto[0].filename}`;
-      if (req.files.documento_achs) payload.achs_url = `/uploads/ACHS/${req.files.documento_achs[0].filename}`;
+      if (req.files.foto) {
+        payload.foto_url = `/${req.files.foto[0].path.replace(/\\/g, "/")}`;
+      }
+      if (req.files.documento_achs) {
+        payload.achs_url = `/${req.files.documento_achs[0].path.replace(/\\/g, "/")}`;
+      }
     }
 
     if (loggedUser.role === "ADMIN_CLIENTE" && ["ROOT", "ADMIN_CLIENTE"].includes(payload.role)) {
@@ -83,16 +94,13 @@ export const updateUser = async (req, res) => {
 };
 
 /* =========================================
-   GET USERS (CORREGIDO: Muestra todo por defecto)
+   GET USERS
 ========================================= */
 export const getUsers = async (req, res) => {
   try {
     const loggedUser = req.user;
     const { role: queryRole, company_id: queryCompany } = req.query;
 
-    // Si es ADMIN_CLIENTE, filtramos por su empresa. 
-    // Si queryRole viene (ej: ?role=USUARIO), el service filtrará.
-    // Si queryRole NO viene, el service traerá todos los de la empresa.
     const users = loggedUser.role === "ADMIN_CLIENTE"
         ? await userService.getUsers(queryRole, loggedUser.company_id)
         : await userService.getUsers(queryRole, queryCompany);
