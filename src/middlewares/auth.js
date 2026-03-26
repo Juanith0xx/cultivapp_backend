@@ -13,12 +13,12 @@ const authMiddleware = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
-    // 🔎 1. Traemos el company_id real de la base de datos
+    // 🔎 1. Traemos los datos. Usamos LEFT JOIN para que los ROOT (sin empresa) puedan entrar.
     const result = await pool.query(
       `
     SELECT u.session_id, u.is_active, u.deleted_at, u.company_id, u.role, c.name as company_name
     FROM users u
-    JOIN companies c ON u.company_id = c.id
+    LEFT JOIN companies c ON u.company_id = c.id
     WHERE u.id = $1
   `,  
       [decoded.id]
@@ -33,16 +33,17 @@ const authMiddleware = async (req, res, next) => {
     // 🔥 Validaciones de seguridad
     if (user.deleted_at) return res.status(401).json({ message: "Usuario eliminado" })
     if (!user.is_active) return res.status(401).json({ message: "Cuenta deshabilitada" })
+    
+    // Validar sesión activa (Importante: revisa que tu login asigne session_id al Root)
     if (!user.session_id || user.session_id !== decoded.session_id) {
       return res.status(401).json({ message: "Sesión cerrada por inicio en otro dispositivo" })
     }
 
-    // 🚩 2. Inyectamos los datos REALES y ACTUALIZADOS en req.user
-    // Esto asegura que company_id siempre esté disponible para Multer y los controladores
+    // 🚩 2. Inyectamos los datos REALES
     req.user = {
-      ...decoded, // Mantenemos lo que venía en el token (id, email, etc)
-      company_id: user.company_id, // Forzamos el UUID real de la DB
-      company_name: user.company_name,
+      ...decoded,
+      company_id: user.company_id,
+      company_name: user.company_name || "ADMINISTRACIÓN CENTRAL", // Nombre por defecto para Root
       role: user.role
     }
 

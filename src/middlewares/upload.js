@@ -4,22 +4,19 @@ import fs from "fs"
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // 🚩 1. Identificar el nombre de la empresa
     const companyName = req.user?.company_name || "default_tenant";
     
-    // 🚩 2. "Sanitizar" el nombre: "Santa Isabel" -> "santa_isabel"
-    // Esto quita espacios, tildes y caracteres especiales
+    // Sanitización del nombre de la empresa para la carpeta
     const safeName = companyName
       .toLowerCase()
       .trim()
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // Quita tildes
-      .replace(/\s+/g, "_")           // Cambia espacios por guiones bajos
-      .replace(/[^a-z0-9_]/g, "");    // Quita todo lo que no sea letra, número o _
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, "_")
+      .replace(/[^a-z0-9_]/g, "");
 
     let folder = `uploads/${safeName}/`;
 
-    // 3. Lógica de carpetas dinámicas
     if (file.fieldname === "documento_achs") {
       folder += "documentos/ACHS/";
     } 
@@ -28,19 +25,16 @@ const storage = multer.diskStorage({
     } 
     else if (file.fieldname === "foto") { 
       const tipo = req.body.tipo_evidencia || "otros";
-      
       const mapeoCarpetas = {
         'fachada': 'foto_local',
         'gondola_inicio': 'foto_gondola',
         'gondola_final': 'foto_term_producto',
         'observaciones': 'observaciones'
       };
-
       const subCarpeta = mapeoCarpetas[tipo] || "otros";
       folder += `evidencias/${subCarpeta}/`;
     }
 
-    // 4. Crear estructura de carpetas recursiva
     if (!fs.existsSync(folder)) {
       fs.mkdirSync(folder, { recursive: true });
     }
@@ -48,11 +42,24 @@ const storage = multer.diskStorage({
     cb(null, folder);
   },
   filename: (req, file, cb) => {
+    // 🚩 MEJORA DE AUDITORÍA: Fecha y Hora legible
     const routeId = req.params.id || "sin_ruta";
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e4);
+    
+    const ahora = new Date();
+    
+    // Formato: 2026-03-25
+    const fecha = ahora.toISOString().split('T')[0]; 
+    
+    // Formato: 21h45 (Hora local del servidor)
+    const hora = ahora.getHours().toString().padStart(2, '0') + "h" + 
+                 ahora.getMinutes().toString().padStart(2, '0');
+
+    // Mantenemos un sufijo aleatorio pequeño por si se suben 2 fotos en el mismo minuto
+    const random = Math.round(Math.random() * 1e3);
     const ext = path.extname(file.originalname);
     
-    cb(null, `visita_${routeId}_${uniqueSuffix}${ext}`);
+    // Ejemplo: visita_a538..._2026-03-25_21h45_842.png
+    cb(null, `visita_${routeId}_${fecha}_${hora}_${random}${ext}`);
   }
 })
 
