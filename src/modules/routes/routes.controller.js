@@ -50,6 +50,45 @@ export const checkIn = async (req, res) => {
   }
 };
 
+/**
+ * 🛒 REGISTRO DE ESCANEO DE PRODUCTOS (NUEVO)
+ * Guarda el código de barras asociado a la visita y la empresa
+ */
+export const addVisitScan = async (req, res) => {
+  try {
+    const { id } = req.params; // visit_id
+    const { barcode } = req.body;
+    const companyId = req.user.company_id;
+
+    if (!barcode) {
+      return res.status(400).json({ message: "Código de barras requerido." });
+    }
+
+    const query = `
+      INSERT INTO public.visit_scans (
+        visit_id, 
+        company_id, 
+        barcode, 
+        scanned_at
+      ) 
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
+      RETURNING *;
+    `;
+    
+    const params = [id, companyId, barcode];
+    const result = await db.query(query, params);
+
+    res.status(201).json({ 
+      success: true, 
+      message: "Producto registrado exitosamente",
+      data: result.rows[0] 
+    });
+  } catch (error) {
+    console.error("❌ ERROR EN ADD_VISIT_SCAN:", error.message);
+    res.status(500).json({ message: "Error al registrar escaneo: " + error.message });
+  }
+};
+
 export const finishVisit = async (req, res) => {
   try {
     const { id } = req.params;
@@ -172,9 +211,6 @@ export const saveVisitPhoto = async (req, res) => {
   try {
     const routeId = req.params.id || req.body.visit_id; 
     const { tipo_evidencia } = req.body;
-    
-    // 🚩 IMPORTANTE: Usamos el ID (UUID) para la base de datos
-    // Esto evita el error de "invalid input syntax for type integer"
     const companyId = req.user.company_id; 
 
     if (!req.file) {
@@ -195,14 +231,7 @@ export const saveVisitPhoto = async (req, res) => {
       RETURNING *;
     `;
     
-    // Pasamos el companyId tal como viene (UUID) porque ya arreglamos la tabla
-    const params = [
-      routeId, 
-      companyId, 
-      filePath, 
-      tipo_evidencia || 'otros'
-    ];
-
+    const params = [routeId, companyId, filePath, tipo_evidencia || 'otros'];
     const result = await db.query(query, params);
 
     res.status(201).json({ 

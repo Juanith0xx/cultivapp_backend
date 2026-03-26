@@ -14,7 +14,8 @@ import {
   resetCheckIn,
   saveVisitPhoto,
   getLiveMonitoring, 
-  finishVisit        
+  finishVisit,
+  addVisitScan // 🚩 IMPORTANTE: Agregamos la nueva función del controlador
 } from "./routes.controller.js"
 
 const router = Router()
@@ -82,8 +83,6 @@ router.post(
 /**
  * 📸 EVIDENCIA FOTOGRÁFICA (MEJORADA PARA SAAS)
  * URL: POST /api/routes/:id/photo
- * Se cambió 'photo' por ':id/photo' para identificar la visita en la URL
- * Se cambió upload.single("photo") por upload.single("foto") para coincidir con el Frontend
  */
 router.post(
   "/:id/photo", 
@@ -91,6 +90,18 @@ router.post(
   roleGuard("USUARIO", "ROOT"), 
   upload.single("foto"), 
   saveVisitPhoto
+)
+
+/**
+ * 🛒 REGISTRO DE ESCANEO DE PRODUCTOS (EAN/BARCODE)
+ * URL: POST /api/routes/:id/scans
+ * Esta es la ruta que tu iPhone está buscando y daba Error 404
+ */
+router.post(
+  "/:id/scans",
+  auth,
+  roleGuard("USUARIO", "ROOT"),
+  addVisitScan // 🚩 Llamamos a la lógica para guardar en public.visit_scans
 )
 
 // ✅ Finalizar visita (Check-out)
