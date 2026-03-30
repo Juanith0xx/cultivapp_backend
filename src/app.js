@@ -34,10 +34,11 @@ app.use(
 )
 
 /* =========================================
-   BODY PARSER
+   BODY PARSER (LÍMITES AUMENTADOS PARA OFFLINE)
 ========================================= */
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+// 🚩 MEJORA: Aumentamos a 50mb para que las ráfagas de fotos sincronizadas no den error
+app.use(express.json({ limit: '50mb' }))
+app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
 /* =========================================
    ESTÁTICOS (CONFIGURACIÓN DE DESCARGA FORZADA)
@@ -49,22 +50,41 @@ if (!fs.existsSync(uploadsPath)) {
   fs.mkdirSync(uploadsPath, { recursive: true })
 }
 
-/**
- * 🚩 MEJORA: Middleware de estáticos con headers de descarga
- * Si el archivo es un PDF de la carpeta 'doc_achs', forzamos la descarga.
- */
 app.use("/uploads", express.static(uploadsPath, {
   setHeaders: (res, filePath) => {
-    // Normalizamos la ruta para que funcione en Windows y Linux
     const normalizedPath = filePath.replace(/\\/g, "/")
-    
     if (normalizedPath.includes("doc_achs") && normalizedPath.endsWith(".pdf")) {
-      // Content-Disposition: attachment obliga al navegador a descargar el archivo
       res.set("Content-Disposition", "attachment")
       res.set("Content-Type", "application/pdf")
     }
   }
 }))
+
+/* =========================================
+   DEBUG: INSPECCIÓN DE ARCHIVOS (PARA RENDER FREE)
+========================================= */
+/**
+ * 🚩 NUEVA RUTA: Permite ver si las fotos se guardaron realmente.
+ * Accede a: https://tu-backend.onrender.com/api/debug/files
+ */
+app.get("/api/debug/files", (req, res) => {
+  if (!fs.existsSync(uploadsPath)) {
+    return res.json({ message: "La carpeta uploads no existe aún.", total: 0 });
+  }
+
+  fs.readdir(uploadsPath, (err, files) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    // Filtramos para ignorar archivos ocultos si los hay
+    const fileList = files.filter(f => !f.startsWith('.'));
+    
+    res.json({
+      total_fotos: fileList.length,
+      archivos: fileList,
+      timestamp: new Date().toISOString()
+    });
+  });
+});
 
 /* =========================================
    ROUTES API
