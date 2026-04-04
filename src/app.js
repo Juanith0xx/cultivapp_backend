@@ -14,6 +14,7 @@ import routesRoutes from "./modules/routes/routes.routes.js"
 import regionsRoutes from "./modules/regions/regions.routes.js"
 import comunasRoutes from "./modules/comunas/comunas.routes.js"
 import questionsRoutes from "./modules/questions/questions.routes.js"
+import reportsRoutes from "./modules/reports/reports.routes.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -21,7 +22,7 @@ const __dirname = path.dirname(__filename)
 const app = express()
 
 /* =========================================
-   CORS CONFIG
+   CORS CONFIG (OPTIMIZADO PARA DASHBOARD)
 ========================================= */
 app.use(
   cors({
@@ -29,30 +30,45 @@ app.use(
       "http://localhost:5173",
       "https://cultivapp-frontend.vercel.app"
     ],
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    optionsSuccessStatus: 200 
   })
 )
 
+app.options(/.*/, cors()); 
+
 /* =========================================
-   BODY PARSER (LÍMITES AUMENTADOS PARA OFFLINE)
+   BODY PARSER
 ========================================= */
-// 🚩 MEJORA: Aumentamos a 50mb para que las ráfagas de fotos sincronizadas no den error
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
 /* =========================================
-   ESTÁTICOS (CONFIGURACIÓN DE DESCARGA FORZADA)
+   ESTÁTICOS (CORREGIDO PARA SUB-CARPETAS)
 ========================================= */
+// 🚩 IMPORTANTE: 'rootPath' debe apuntar a la raíz donde está la carpeta 'uploads'
 const rootPath = path.resolve() 
 const uploadsPath = path.join(rootPath, "uploads")
 
+// Asegurar que la carpeta base existe
 if (!fs.existsSync(uploadsPath)) {
   fs.mkdirSync(uploadsPath, { recursive: true })
 }
 
+/**
+ * 📸 MEJORA CRÍTICA: Servir estáticos permitiendo navegación profunda.
+ * Esto permitirá que si en la DB guardas: "/cultiva_strategic.../evidencias/foto_gondola/archivo.png"
+ * El navegador lo encuentre correctamente en: http://localhost:PORT/uploads/...
+ */
 app.use("/uploads", express.static(uploadsPath, {
+  fallthrough: false, // Si no encuentra el archivo, devuelve 404 en lugar de pasar al siguiente middleware
   setHeaders: (res, filePath) => {
+    // Normalizamos para Windows/Linux
     const normalizedPath = filePath.replace(/\\/g, "/")
+    
+    // Forzar descarga si es documento ACHS
     if (normalizedPath.includes("doc_achs") && normalizedPath.endsWith(".pdf")) {
       res.set("Content-Disposition", "attachment")
       res.set("Content-Type", "application/pdf")
@@ -61,29 +77,35 @@ app.use("/uploads", express.static(uploadsPath, {
 }))
 
 /* =========================================
-   DEBUG: INSPECCIÓN DE ARCHIVOS (PARA RENDER FREE)
+   DEBUG: INSPECCIÓN DE ARCHIVOS (RECURSIVO)
 ========================================= */
-/**
- * 🚩 NUEVA RUTA: Permite ver si las fotos se guardaron realmente.
- * Accede a: https://tu-backend.onrender.com/api/debug/files
- */
+// 🚩 Actualizado para que puedas ver qué hay dentro de las subcarpetas de empresas
 app.get("/api/debug/files", (req, res) => {
-  if (!fs.existsSync(uploadsPath)) {
-    return res.json({ message: "La carpeta uploads no existe aún.", total: 0 });
-  }
-
-  fs.readdir(uploadsPath, (err, files) => {
-    if (err) return res.status(500).json({ error: err.message });
-    
-    // Filtramos para ignorar archivos ocultos si los hay
-    const fileList = files.filter(f => !f.startsWith('.'));
-    
-    res.json({
-      total_fotos: fileList.length,
-      archivos: fileList,
-      timestamp: new Date().toISOString()
+  const getFilesRecursively = (dir, fileList = []) => {
+    const files = fs.readdirSync(dir);
+    files.forEach(file => {
+      const filePath = path.join(dir, file);
+      if (fs.statSync(filePath).isDirectory()) {
+        getFilesRecursively(filePath, fileList);
+      } else {
+        // Guardamos la ruta relativa para comparar con la DB
+        fileList.push(filePath.replace(uploadsPath, ""));
+      }
     });
-  });
+    return fileList;
+  };
+
+  try {
+    if (!fs.existsSync(uploadsPath)) return res.json({ total: 0, message: "No existe uploads" });
+    const allFiles = getFilesRecursively(uploadsPath);
+    res.json({
+      total_fotos: allFiles.length,
+      rutas_detectadas: allFiles,
+      server_path: uploadsPath
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /* =========================================
@@ -97,26 +119,18 @@ app.use("/api/routes", routesRoutes)
 app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
+app.use("/api/reports", reportsRoutes) 
 
 /* =========================================
-   HEALTH CHECK
+   HEALTH CHECK / ERROR HANDLING
 ========================================= */
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "cultivapp-api",
-    timestamp: new Date().toISOString()
-  })
+  res.json({ status: "ok", service: "cultivapp-api", timestamp: new Date().toISOString() })
 })
 
-/* =========================================
-   MANEJO DE ERRORES GLOBAL
-========================================= */
 app.use((err, req, res, next) => {
   console.error("❌ ERROR SERVER:", err.message)
-  res.status(err.status || 500).json({
-    message: err.message || "Error interno del servidor",
-  })
+  res.status(err.status || 500).json({ message: err.message || "Error interno del servidor" })
 })
 
 export default app
