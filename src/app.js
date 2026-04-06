@@ -12,9 +12,10 @@ import routesRoutes from "./modules/routes/routes.routes.js"
 
 /* NUEVOS MODULOS */
 import regionsRoutes from "./modules/regions/regions.routes.js"
-import comunasRoutes from "./modules/comunas/comunas.routes.js"
+import comunasRoutes from "./modules/comunas/comunas.routes.js" // Nota: Verifica si es .routes.js o .rules.js según tu archivo original
 import questionsRoutes from "./modules/questions/questions.routes.js"
 import reportsRoutes from "./modules/reports/reports.routes.js"
+import notificationsRoutes from "./modules/notifications/notifications.routes.js" // 🔔 IMPORTADO
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -48,27 +49,17 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }))
 /* =========================================
    ESTÁTICOS (CORREGIDO PARA SUB-CARPETAS)
 ========================================= */
-// 🚩 IMPORTANTE: 'rootPath' debe apuntar a la raíz donde está la carpeta 'uploads'
 const rootPath = path.resolve() 
 const uploadsPath = path.join(rootPath, "uploads")
 
-// Asegurar que la carpeta base existe
 if (!fs.existsSync(uploadsPath)) {
   fs.mkdirSync(uploadsPath, { recursive: true })
 }
 
-/**
- * 📸 MEJORA CRÍTICA: Servir estáticos permitiendo navegación profunda.
- * Esto permitirá que si en la DB guardas: "/cultiva_strategic.../evidencias/foto_gondola/archivo.png"
- * El navegador lo encuentre correctamente en: http://localhost:PORT/uploads/...
- */
 app.use("/uploads", express.static(uploadsPath, {
-  fallthrough: false, // Si no encuentra el archivo, devuelve 404 en lugar de pasar al siguiente middleware
+  fallthrough: false, 
   setHeaders: (res, filePath) => {
-    // Normalizamos para Windows/Linux
     const normalizedPath = filePath.replace(/\\/g, "/")
-    
-    // Forzar descarga si es documento ACHS
     if (normalizedPath.includes("doc_achs") && normalizedPath.endsWith(".pdf")) {
       res.set("Content-Disposition", "attachment")
       res.set("Content-Type", "application/pdf")
@@ -79,7 +70,6 @@ app.use("/uploads", express.static(uploadsPath, {
 /* =========================================
    DEBUG: INSPECCIÓN DE ARCHIVOS (RECURSIVO)
 ========================================= */
-// 🚩 Actualizado para que puedas ver qué hay dentro de las subcarpetas de empresas
 app.get("/api/debug/files", (req, res) => {
   const getFilesRecursively = (dir, fileList = []) => {
     const files = fs.readdirSync(dir);
@@ -88,7 +78,6 @@ app.get("/api/debug/files", (req, res) => {
       if (fs.statSync(filePath).isDirectory()) {
         getFilesRecursively(filePath, fileList);
       } else {
-        // Guardamos la ruta relativa para comparar con la DB
         fileList.push(filePath.replace(uploadsPath, ""));
       }
     });
@@ -120,6 +109,7 @@ app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
 app.use("/api/reports", reportsRoutes) 
+app.use("/api/notifications", notificationsRoutes) // 🔔 REGISTRADO (Esto elimina el 404)
 
 /* =========================================
    HEALTH CHECK / ERROR HANDLING
