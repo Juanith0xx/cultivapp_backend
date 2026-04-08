@@ -1,6 +1,7 @@
 import { supabase } from '../../database/supabase.js'; 
 
 /**
+<<<<<<< HEAD
  * 🚀 ENVIAR NOTIFICACIÓN (Individual / Local)
  */
 export const sendNotification = async (req, res) => {
@@ -95,6 +96,34 @@ export const getMyNotifications = async (req, res) => {
     // Si no es ROOT, solo puede ver lo que pertenece a su tenant_id
     if (role !== 'ROOT') {
       query = query.eq('tenant_id', companyId);
+=======
+ * 🔔 OBTENER NOTIFICACIONES (SaaS Isolation & Visibility)
+ * Resuelve el error de la bandeja vacía para el ROOT.
+ */
+export const getMyNotifications = async (req, res) => {
+  try {
+    const { id: userId, company_id: tenant_id, local_id, role } = req.user;
+
+    let query = supabase.from('notifications').select('*');
+
+    // 🚩 LÓGICA DE VISIBILIDAD:
+    if (role === 'ROOT') {
+      // El ROOT ve absolutamente todo el historial del sistema para monitoreo
+      // Si prefieres que el ROOT solo vea las de su propia "empresa administradora", 
+      // podrías añadir .eq('tenant_id', tenant_id)
+      query = query.order('created_at', { ascending: false });
+    } 
+    else {
+      // 🛡️ AISLAMIENTO SAAS (Usuarios y Admins de Clientes)
+      // Filtro OR: (Para mi ID) O (Es Global de mi empresa) O (De mi Local específico)
+      let orFilter = `target_user_id.eq.${userId},scope.eq.global`;
+      
+      if (local_id) {
+        orFilter += `,and(scope.eq.local,target_local_id.eq.${local_id})`;
+      }
+
+      query = query.or(orFilter).eq('tenant_id', tenant_id);
+>>>>>>> a34866a (fix funcion notificaiones)
     }
 
     const { data, error } = await query
@@ -117,16 +146,93 @@ export const getMyNotifications = async (req, res) => {
 
     res.status(200).json(securedData);
   } catch (error) {
-    console.error('❌ Error en getMyNotifications:', error);
+    console.error('❌ Error getMyNotifications:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
 /**
+<<<<<<< HEAD
  * 📤 HISTORIAL DE ENVIADOS
+=======
+ * 🚀 ENVIAR NOTIFICACIÓN SIMPLE
+ */
+export const sendNotification = async (req, res) => {
+  try {
+    const { title, message, scope, targetId, companyId, type } = req.body;
+    const sender_id = req.user.id; 
+    
+    // Si el emisor es ROOT, usa la empresa destino enviada, si no, su propia empresa
+    const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
+
+    const notificationData = {
+      tenant_id,
+      sender_id,
+      title,
+      message,
+      type: type || 'info',
+      scope, 
+      is_read: false,
+      target_user_id: scope === 'individual' ? targetId : null,
+      target_local_id: scope === 'local' ? targetId : null
+    };
+
+    const { data, error } = await supabase.from('notifications').insert([notificationData]).select();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data: data[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * 🔥 ENVIAR NOTIFICACIONES MASIVAS (Bulk)
+ */
+export const sendBulkNotifications = async (req, res) => {
+  try {
+    const { title, message, scope, targetIds, companyId, localId } = req.body;
+    const sender_id = req.user.id;
+    const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
+
+    let finalTargets = [];
+
+    // Si es global, el array de targetIds puede venir vacío, 
+    // pero para la DB necesitamos al menos una entrada o manejar el scope
+    if (scope === 'global') {
+      finalTargets = [null]; // Se crea una sola entrada global para la empresa
+    } else {
+      finalTargets = targetIds;
+    }
+
+    const notifications = finalTargets.map(id => ({
+      tenant_id,
+      sender_id,
+      title,
+      message,
+      scope,
+      is_read: false,
+      target_user_id: scope === 'individual' ? id : null,
+      target_local_id: scope === 'local' ? localId : null,
+      type: 'info'
+    }));
+
+    const { error } = await supabase.from('notifications').insert(notifications);
+    if (error) throw error;
+
+    res.status(201).json({ success: true, message: 'Alertas masivas enviadas con éxito' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * ✅ MARCAR COMO LEÍDA
+>>>>>>> a34866a (fix funcion notificaiones)
  */
 export const getSentNotifications = async (req, res) => {
   try {
+<<<<<<< HEAD
     const { id, role, company_id } = req.user;
     let query = supabase.from('notifications').select('*');
 
@@ -143,11 +249,27 @@ export const getSentNotifications = async (req, res) => {
     res.status(200).json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
+=======
+    const { id } = req.params;
+
+    // 🚩 FIX: Eliminamos el filtro estricto de target_user_id 
+    // para permitir marcar como leídas las notificaciones globales.
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', id);
+
+    if (error) throw error;
+    res.status(200).json({ success: true });
+  } catch (error) { 
+    res.status(500).json({ error: error.message }); 
+>>>>>>> a34866a (fix funcion notificaiones)
   }
 };
 
 /**
  * 🗑️ ELIMINAR NOTIFICACIÓN
+<<<<<<< HEAD
  */
 export const deleteNotification = async (req, res) => {
   try {
@@ -205,18 +327,38 @@ export const markAsRead = async (req, res) => {
 
 /**
  * 🚩 MARCAR TODAS COMO LEÍDAS
+=======
+>>>>>>> a34866a (fix funcion notificaiones)
  */
-export const markAllAsRead = async (req, res) => {
+export const deleteNotification = async (req, res) => {
   try {
+<<<<<<< HEAD
     const userId = req.user.id;
     const { error } = await supabase
       .from('notifications')
       .update({ is_read: true })
       .eq('is_read', false)
       .eq('target_user_id', userId);
+=======
+    const { id } = req.params;
+    const { role, company_id } = req.user;
 
+    let query = supabase.from('notifications').delete().eq('id', id);
+    
+    // Si no es ROOT, solo puede borrar notificaciones de su propia empresa
+    if (role !== 'ROOT') {
+      query = query.eq('tenant_id', company_id);
+    }
+>>>>>>> a34866a (fix funcion notificaiones)
+
+    const { error } = await query;
     if (error) throw error;
+<<<<<<< HEAD
     res.status(200).json({ success: true });
+=======
+
+    res.status(200).json({ success: true, message: 'Notificación eliminada' });
+>>>>>>> a34866a (fix funcion notificaiones)
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
