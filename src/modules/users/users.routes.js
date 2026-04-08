@@ -1,5 +1,5 @@
 import { Router } from "express"
-// 🚩 IMPORTANTE: Importamos el middleware centralizado que tiene la lógica de carpetas
+// 🚩 IMPORTANTE: Middleware centralizado para manejo de archivos (S3/Local)
 import upload from "../../middlewares/upload.js" 
 
 import {
@@ -19,25 +19,28 @@ import roleGuard from "../../middlewares/roleGuard.js"
 const router = Router()
 
 /* =========================================
-   RUTAS PÚBLICAS (Sin protección)
+   RUTAS PÚBLICAS (Libre acceso)
 ========================================= */
+// Credencial pública para validación mediante código QR
 router.get("/public/verify/:id", getPublicUserCredential)
 
 /* =========================================
-   RUTAS PRIVADAS (Protegidas con Auth)
+   RUTAS PRIVADAS (Requieren Token Válido)
 ========================================= */
 router.use(auth) 
 
 /**
- * 🚩 MEJORA: Configuración de campos de archivo
- * Esto permite subir 'foto' y 'documento_achs' en la misma petición.
+ * 🚩 CONFIGURACIÓN MULTI-ARCHIVO
+ * Permite la carga simultánea de la foto de perfil y el certificado ACHS/Seguro.
  */
 const userUploads = upload.fields([
   { name: "foto", maxCount: 1 },
   { name: "documento_achs", maxCount: 1 }
 ])
 
-// Crear usuario con soporte para múltiples archivos
+/* --- GESTIÓN DE USUARIOS --- */
+
+// Crear: ROOT crea globalmente / ADMIN crea en su empresa
 router.post(
   "/", 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
@@ -45,7 +48,7 @@ router.post(
   createUser
 )
 
-// Actualizar usuario con soporte para múltiples archivos
+// Actualizar: Soporta actualización de archivos y datos de contacto
 router.put(
   "/:id", 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
@@ -53,10 +56,47 @@ router.put(
   updateUser
 )
 
-router.get("/", roleGuard("ROOT", "ADMIN_CLIENTE"), getUsers)
-router.patch("/:id/toggle", roleGuard("ROOT", "ADMIN_CLIENTE"), toggleUser)
-router.delete("/:id", roleGuard("ROOT", "ADMIN_CLIENTE"), deleteUser)
-router.put("/:id/reset-password", roleGuard("ROOT", "ADMIN_CLIENTE"), resetPassword)
-router.get("/company/:companyId/stats", roleGuard("ROOT", "ADMIN_CLIENTE"), getCompanyStats)
+/** * 🚩 GET USERS: 
+ * RootDashboard.jsx llama a esta ruta. 
+ * El controlador DEBE permitir company_id null si req.user.role === 'ROOT'
+ */
+router.get(
+  "/", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  getUsers
+)
+
+// Activación/Desactivación lógica de cuentas
+router.patch(
+  "/:id/toggle", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  toggleUser
+)
+
+// Eliminación física (restringida a cascada de permisos)
+router.delete(
+  "/:id", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  deleteUser
+)
+
+// Forzar cambio de password desde el panel administrativo
+router.put(
+  "/:id/reset-password", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  resetPassword
+)
+
+/* --- ESTADÍSTICAS --- */
+
+/**
+ * 🚩 COMPANY STATS:
+ * Utilizada por AdminOverview y Analytics para ver límites de licencias.
+ */
+router.get(
+  "/company/:companyId/stats", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  getCompanyStats
+)
 
 export default router
