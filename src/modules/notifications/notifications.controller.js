@@ -7,121 +7,92 @@ export const sendNotification = async (req, res) => {
   try {
     const { title, message, scope, targetId, companyId, type } = req.body;
     const sender_id = req.user.id; 
-
     const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
 
     if (!tenant_id && scope !== 'global_root') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No se pudo determinar el ID de empresa' 
-      });
+      return res.status(400).json({ success: false, message: 'Falta ID de empresa' });
     }
 
     const notificationData = {
-      tenant_id: tenant_id || null,
+      tenant_id,
       sender_id,
       title,
       message,
       type: type || 'info',
       scope,
       is_read: false,
-      target_user_id: scope === 'individual' && targetId ? targetId : null,
-      target_local_id: scope === 'local' && targetId ? targetId : null
+      target_user_id: scope === 'individual' ? targetId : null,
+      target_local_id: scope === 'local' ? targetId : null
     };
 
-    const { data, error } = await supabase
-      .from('notifications')
-      .insert([notificationData])
-      .select();
-
+    const { data, error } = await supabase.from('notifications').insert([notificationData]).select();
     if (error) throw error;
 
     res.status(201).json({ success: true, data: data[0] });
   } catch (error) {
-    console.error('❌ Error en sendNotification:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
 /**
- * 🔥 ENVIAR NOTIFICACIONES MASIVAS (Bulk por Rol)
+ * 🔥 ENVIAR NOTIFICACIONES MASIVAS (Bulk)
  */
 export const sendBulkNotifications = async (req, res) => {
   try {
     const { title, message, targetRole, companyId, type } = req.body;
     const sender_id = req.user.id;
-
     const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
 
-    // 1. Buscamos a todos los usuarios que coincidan con el Rol y la Empresa
     let userQuery = supabase.from('users').select('id');
-    
     if (targetRole) userQuery = userQuery.eq('role', targetRole);
     if (tenant_id) userQuery = userQuery.eq('company_id', tenant_id);
 
     const { data: users, error: userError } = await userQuery;
-
     if (userError) throw userError;
-    if (!users || users.length === 0) {
-      return res.status(404).json({ success: false, message: "No se encontraron usuarios." });
-    }
 
-    // 2. Preparamos inserción masiva
-    const bulkNotifications = users.map(user => ({
+    const bulkNotifications = users.map(u => ({
       tenant_id,
       sender_id,
       title,
       message,
       type: type || 'warning',
       scope: 'individual', 
-      target_user_id: user.id,
+      target_user_id: u.id,
       is_read: false
     }));
 
-    const { error: insertError } = await supabase
-      .from('notifications')
-      .insert(bulkNotifications);
-
+    const { error: insertError } = await supabase.from('notifications').insert(bulkNotifications);
     if (insertError) throw insertError;
 
-    res.status(201).json({
-      success: true,
-      message: `Notificaciones enviadas con éxito a ${users.length} usuarios.`
-    });
-
+    res.status(201).json({ success: true, message: `Enviadas a ${users.length} usuarios.` });
   } catch (error) {
-    console.error('❌ Error en sendBulkNotifications:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
 /**
- * 🔔 OBTENER MIS NOTIFICACIONES (Mejorado para Perfil de Usuario)
+ * 🔔 OBTENER MIS NOTIFICACIONES (Blindado)
+ * Esta función es la que garantiza que el usuario vea SOLO lo suyo.
  */
 export const getMyNotifications = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    const companyId = req.user?.company_id;
-    const localId = req.user?.local_id;
-    const role = req.user?.role;
+    const userId = req.user.id;
+    const companyId = req.user.company_id;
+    const localId = req.user.local_id;
+    const role = req.user.role;
 
-    // Solo el ROOT puede saltarse el company_id
-    if (!companyId && role !== 'ROOT') {
-      return res.status(400).json({ error: "Configuración de empresa incompleta." });
+    // 1. Construcción del filtro OR (PostgREST)
+    // El usuario puede ver: 1. Su ID individual, 2. Scope global, 3. Su Local ID
+    let orConditions = `target_user_id.eq.${userId},scope.eq.global`;
+    
+    if (localId && localId !== 'null') {
+      orConditions += `,and(scope.eq.local,target_local_id.eq.${localId})`;
     }
 
-    // --- MEJORA: Construcción de filtro por pertenencia ---
-    // El usuario ve: 1. Lo que es para él (id) O 2. Lo que es Global
-    let orFilter = `target_user_id.eq.${userId},scope.eq.global`;
+    let query = supabase.from('notifications').select('*').or(orConditions);
 
-    // 3. O lo que es para su Local específico
-    if (localId && localId !== 'undefined' && localId !== 'null') {
-      orFilter += `,and(scope.eq.local,target_local_id.eq.${localId})`;
-    }
-
-    let query = supabase.from('notifications').select('*').or(orFilter);
-
-    // Seguridad adicional: No mezclar datos entre empresas
+    // 2. Filtro estricto por Empresa (Tenant)
+    // Si no es ROOT, solo puede ver lo que pertenece a su tenant_id
     if (role !== 'ROOT') {
       query = query.eq('tenant_id', companyId);
     }
@@ -131,7 +102,20 @@ export const getMyNotifications = async (req, res) => {
       .limit(50);
 
     if (error) throw error;
-    res.status(200).json(data);
+
+    // 🚩 3. FILTRO DE SEGURIDAD MANUAL (Última barrera)
+    // Por si el filtro .or() falla o se salta, limpiamos el array antes de enviarlo.
+    const securedData = data.filter(n => {
+      if (role === 'ROOT') return true; // ROOT ve todo lo de la query
+      
+      const isForMe = n.target_user_id === userId;
+      const isGlobal = n.scope === 'global' && n.tenant_id === companyId;
+      const isMyLocal = n.scope === 'local' && n.target_local_id === localId;
+      
+      return isForMe || isGlobal || isMyLocal;
+    });
+
+    res.status(200).json(securedData);
   } catch (error) {
     console.error('❌ Error en getMyNotifications:', error);
     res.status(500).json({ error: error.message });
@@ -139,48 +123,100 @@ export const getMyNotifications = async (req, res) => {
 };
 
 /**
- * 🚩 MARCAR COMO LEÍDA (Validando propiedad)
+ * 📤 HISTORIAL DE ENVIADOS
  */
-export const markAsRead = async (req, res) => {
+export const getSentNotifications = async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id; // Obtenemos el ID del token/auth
+    const { id, role, company_id } = req.user;
+    let query = supabase.from('notifications').select('*');
 
-    const { data, error } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', id)
-      .eq('target_user_id', userId) // 🔥 Seguridad: Solo puedes leer las tuyas
-      .select();
-
-    if (error) throw error;
-    
-    if (data.length === 0) {
-      return res.status(403).json({ success: false, message: "No tienes permiso o la notificación no existe." });
+    if (role === 'ROOT') {
+      // Root ve todo el historial
+    } else if (role === 'ADMIN_CLIENTE') {
+      query = query.eq('tenant_id', company_id);
+    } else {
+      query = query.eq('sender_id', id);
     }
 
-    res.status(200).json({ success: true, message: 'Leída', data: data[0] });
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) throw error;
+    res.status(200).json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
 /**
- * 🚩 MARCAR TODAS COMO LEÍDAS (Validando propiedad)
+ * 🗑️ ELIMINAR NOTIFICACIÓN
+ */
+export const deleteNotification = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { id: userId, role, company_id: tenantId } = req.user;
+
+    let query = supabase.from('notifications').delete().eq('id', id);
+
+    if (role !== 'ROOT') {
+      // Un admin solo borra de su empresa, un supervisor solo lo suyo
+      if (role === 'ADMIN_CLIENTE') {
+        query = query.eq('tenant_id', tenantId);
+      } else {
+        query = query.eq('sender_id', userId);
+      }
+    }
+
+    const { data, error } = await query.select();
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+      return res.status(403).json({ success: false, message: "No permitido o no existe." });
+    }
+
+    res.status(200).json({ success: true, message: "Eliminada." });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * 🚩 MARCAR COMO LEÍDA (Estrictamente personal)
+ */
+export const markAsRead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // El filtro .eq('target_user_id', userId) garantiza que no marques nada ajeno
+    const { data, error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', id)
+      .eq('target_user_id', userId) 
+      .select();
+
+    if (error) throw error;
+    if (data.length === 0) return res.status(403).json({ error: "No tienes permiso." });
+
+    res.status(200).json({ success: true, data: data[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * 🚩 MARCAR TODAS COMO LEÍDAS
  */
 export const markAllAsRead = async (req, res) => {
   try {
     const userId = req.user.id;
-
     const { error } = await supabase
       .from('notifications')
       .update({ is_read: true })
       .eq('is_read', false)
-      .eq('target_user_id', userId); // 🔥 Solo afecta a las del usuario actual
+      .eq('target_user_id', userId);
 
     if (error) throw error;
-
-    res.status(200).json({ success: true, message: 'Historial actualizado' });
+    res.status(200).json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

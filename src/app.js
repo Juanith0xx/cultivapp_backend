@@ -12,10 +12,11 @@ import routesRoutes from "./modules/routes/routes.routes.js"
 
 /* NUEVOS MODULOS */
 import regionsRoutes from "./modules/regions/regions.routes.js"
-import comunasRoutes from "./modules/comunas/comunas.routes.js" // Nota: Verifica si es .routes.js o .rules.js según tu archivo original
+import comunasRoutes from "./modules/comunas/comunas.routes.js" 
 import questionsRoutes from "./modules/questions/questions.routes.js"
 import reportsRoutes from "./modules/reports/reports.routes.js"
-import notificationsRoutes from "./modules/notifications/notifications.routes.js" // 🔔 IMPORTADO
+import notificationsRoutes from "./modules/notifications/notifications.routes.js" 
+import chainsRoutes from "./modules/chains/chains.routes.js" // 👈 NUEVA MEJORA: Importación de Cadenas
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -109,7 +110,8 @@ app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
 app.use("/api/reports", reportsRoutes) 
-app.use("/api/notifications", notificationsRoutes) // 🔔 REGISTRADO (Esto elimina el 404)
+app.use("/api/notifications", notificationsRoutes)
+app.use("/api/chains", chainsRoutes) // 👈 NUEVA MEJORA: Registro de ruta para eliminar el 404 de Chains
 
 /* =========================================
    HEALTH CHECK / ERROR HANDLING
