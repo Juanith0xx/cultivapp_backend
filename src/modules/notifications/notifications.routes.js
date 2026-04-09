@@ -1,7 +1,6 @@
 import { Router } from "express";
 import auth from "../../middlewares/auth.js"; 
 import roleGuard from "../../middlewares/roleGuard.js";
-<<<<<<< HEAD
 import { 
   sendNotification, 
   sendBulkNotifications, 
@@ -23,23 +22,23 @@ const router = Router();
 router.get("/", auth, getMyNotifications);
 
 /**
- * @route   PUT /api/notifications/:id/read
- * @desc    Marcar una alerta como leída
- */
-router.put("/:id/read", auth, markAsRead);
-
-/**
  * @route   PUT /api/notifications/read-all
  * @desc    Marcar todo lo recibido como leído
  */
 router.put("/read-all", auth, markAllAsRead);
+
+/**
+ * @route   PUT /api/notifications/:id/read
+ * @desc    Marcar una alerta específica como leída
+ */
+router.put("/:id/read", auth, markAsRead);
 
 
 // --- 📤 RUTAS DE EMISIÓN Y CONTROL (Lo que envío) ---
 
 /**
  * @route   GET /api/notifications/sent
- * @desc    Obtener historial de notificaciones enviadas por el usuario (Para el Manager)
+ * @desc    Obtener historial de notificaciones enviadas (Para el Manager)
  * @access  ROOT, ADMIN_CLIENTE
  */
 router.get("/sent", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getSentNotifications);
@@ -54,7 +53,7 @@ router.post("/send", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), sen
  * @route   POST /api/notifications/send-bulk
  * @desc    Enviar notificaciones masivas (Bulk)
  */
-router.post("/send-bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), sendBulkNotifications);
+router.post("/send-bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), sendBulkNotifications);
 
 /**
  * @route   DELETE /api/notifications/:id
@@ -62,18 +61,5 @@ router.post("/send-bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), sendBulkNoti
  * @access  ROOT, ADMIN_CLIENTE
  */
 router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteNotification);
-=======
-import * as ctrl from "./notifications.controller.js";
-
-const router = Router();
-
-router.get("/", auth, ctrl.getMyNotifications);
-router.put("/:id/read", auth, ctrl.markAsRead);
-router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), ctrl.deleteNotification);
-
-// Emisión: ROOT, ADMIN, SUPERVISOR y VIEW pueden enviar
-router.post("/send", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR", "VIEW"), ctrl.sendNotification);
-router.post("/send-bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), ctrl.sendBulkNotifications);
->>>>>>> a34866a (fix funcion notificaiones)
 
 export default router;
