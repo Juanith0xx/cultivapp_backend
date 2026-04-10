@@ -64,15 +64,16 @@ export const loginUser = async ({ email, password }) => {
   // ✅ AUDITORÍA LOGIN
   await logAction(user.id, "LOGIN")
 
-  // 🚩 MEJORA CRÍTICA: Payload compatible con Supabase Realtime
+  // 🚩 MEJORA DEFINITIVA PARA SUPABASE REALTIME
+  // Incluimos 'sub' para que Supabase llene correctamente auth.uid()
   const token = generateToken({
-    id: user.id,
+    sub: user.id,           
+    id: user.id,            
     company_id: user.company_id,
     session_id: sessionId,
-    // Supabase necesita estos dos campos EXACTOS para autorizar el socket
     aud: 'authenticated',   
     role: 'authenticated', 
-    app_role: user.role // Guardamos tu rol real (ROOT/ADMIN) en otra clave
+    app_role: user.role 
   })
 
   return {
@@ -92,6 +93,7 @@ export const loginUser = async ({ email, password }) => {
    UPDATE PASSWORD (AUTHENTICATED)
 ========================================= */
 export const updatePassword = async (userId, newPassword) => {
+
   if (!newPassword || newPassword.trim().length < 6) {
     throw new Error("La contraseña debe tener al menos 6 caracteres")
   }
@@ -109,14 +111,17 @@ export const updatePassword = async (userId, newPassword) => {
     [hashedPassword, userId]
   )
 
+  // ✅ AUDITORÍA CAMBIO CONTRASEÑA
   await logAction(userId, "CHANGE_PASSWORD")
+
   return true
 }
 
 /* =========================================
-   CREATE PASSWORD RESET TOKEN
+   CREATE PASSWORD RESET TOKEN (SaaS PRO)
 ========================================= */
 export const createPasswordResetToken = async (email) => {
+
   const normalizedEmail = email.trim().toLowerCase()
 
   const userResult = await pool.query(
@@ -124,24 +129,38 @@ export const createPasswordResetToken = async (email) => {
     [normalizedEmail]
   )
 
-  if (userResult.rows.length === 0) return null
+  if (userResult.rows.length === 0) {
+    return null
+  }
 
   const user = userResult.rows[0]
+
   const token = crypto.randomBytes(32).toString("hex")
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex")
+
+  const tokenHash = crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex")
+
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
+  // Invalidar tokens anteriores
   await pool.query(
-    `UPDATE public.password_resets SET used = true WHERE user_id = $1 AND used = false`,
+    `UPDATE public.password_resets
+     SET used = true
+     WHERE user_id = $1 AND used = false`,
     [user.id]
   )
 
   await pool.query(
-    `INSERT INTO public.password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+    `INSERT INTO public.password_resets (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
     [user.id, tokenHash, expiresAt]
   )
 
+  // ✅ AUDITORÍA SOLICITUD RESET
   await logAction(user.id, "REQUEST_PASSWORD_RESET")
+
   return { token }
 }
 
@@ -149,27 +168,60 @@ export const createPasswordResetToken = async (email) => {
    RESET PASSWORD WITH TOKEN
 ========================================= */
 export const resetPasswordWithToken = async (token, newPassword) => {
-  if (!token || !newPassword) throw new Error("Datos inválidos")
-  if (newPassword.trim().length < 6) throw new Error("La contraseña debe tener al menos 6 caracteres")
 
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex")
+  if (!token || !newPassword) {
+    throw new Error("Datos inválidos")
+  }
+
+  if (newPassword.trim().length < 6) {
+    throw new Error("La contraseña debe tener al menos 6 caracteres")
+  }
+
+  const tokenHash = crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex")
 
   const result = await pool.query(
-    `SELECT * FROM public.password_resets WHERE token_hash = $1 AND used = false AND expires_at > NOW()`,
+    `
+    SELECT *
+    FROM public.password_resets
+    WHERE token_hash = $1
+      AND used = false
+      AND expires_at > NOW()
+    `,
     [tokenHash]
   )
 
   const resetRecord = result.rows[0]
-  if (!resetRecord) throw new Error("Token inválido o expirado")
+
+  if (!resetRecord) {
+    throw new Error("Token inválido o expirado")
+  }
 
   const hashedPassword = await bcrypt.hash(newPassword.trim(), 10)
 
   await pool.query(
-    `UPDATE public.users SET password_hash = $1, must_change_password = false, session_id = NULL WHERE id = $2`,
+    `
+    UPDATE public.users
+    SET password_hash = $1,
+        must_change_password = false,
+        session_id = NULL
+    WHERE id = $2
+    `,
     [hashedPassword, resetRecord.user_id]
   )
 
-  await pool.query(`UPDATE public.password_resets SET used = true WHERE id = $1`, [resetRecord.id])
+  await pool.query(
+    `
+    UPDATE public.password_resets
+    SET used = true
+    WHERE id = $1
+    `,
+    [resetRecord.id]
+  )
+
+  // ✅ AUDITORÍA RESET COMPLETADO
   await logAction(resetRecord.user_id, "RESET_PASSWORD")
 
   return true

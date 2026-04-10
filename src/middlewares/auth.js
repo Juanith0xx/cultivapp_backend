@@ -4,82 +4,65 @@ import pool from "../database/db.js";
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
+  console.log("\n--- 🕵️ DEBUG INICIO AUTH ---");
+  
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "No autorizado" });
+    console.log("❌ [DEBUG] No hay Header o no empieza con Bearer");
+    return res.status(401).json({ message: "No autorizado. Token inexistente." });
   }
 
   const token = authHeader.split(" ")[1];
 
   try {
+    // 1. Verificar firma
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log("✅ [DEBUG] Firma válida. Payload:", { id: decoded.id, sub: decoded.sub, session: decoded.session_id });
 
-    // 🔎 Traemos los datos frescos de la DB (Agregamos first_name y last_name)
+    const userId = decoded.sub || decoded.id;
+
+    // 2. Buscar en DB
     const result = await pool.query(
-      `
-      SELECT 
-        u.id, 
-        u.first_name, 
-        u.last_name, 
-        u.session_id, 
-        u.is_active, 
-        u.deleted_at, 
-        u.company_id, 
-        u.role, 
-        c.name as company_name
-      FROM users u
-      LEFT JOIN companies c ON u.company_id = c.id
-      WHERE u.id = $1
-      `,  
-      [decoded.id]
+      `SELECT id, session_id, is_active, role, company_id FROM public.users WHERE id = $1`,  
+      [userId]
     );
 
-    if (!result.rows.length) {
+    if (result.rows.length === 0) {
+      console.log("❌ [DEBUG] Usuario no existe en DB para el ID:", userId);
       return res.status(401).json({ message: "Usuario no existe" });
     }
 
     const user = result.rows[0];
 
-    // 🔥 Validaciones de seguridad
-    if (user.deleted_at) return res.status(401).json({ message: "Usuario eliminado" });
-    if (!user.is_active) return res.status(401).json({ message: "Cuenta deshabilitada" });
-    
+    // 3. Validar Sesión (ESTO ES LO QUE SUELE FALLAR)
+    console.log("🧐 [DEBUG] Comparando Sesiones:");
+    console.log("   Token session_id:", decoded.session_id);
+    console.log("   DB session_id:   ", user.session_id);
+
     if (!user.session_id || user.session_id !== decoded.session_id) {
-      return res.status(401).json({ message: "Sesión cerrada por inicio en otro dispositivo" });
+      console.log("❌ [DEBUG] Mismatch de sesión. Rechazado.");
+      return res.status(401).json({ message: "Sesión inválida." });
     }
 
-    // 🚩 Inyectamos los datos REALES
-    // Ahora incluimos 'full_name' generado desde la DB para que Multer lo use siempre
-    req.user = {
-      id: user.id,
-      company_id: user.company_id,
-      company_name: user.company_name || "SISTEMA CENTRAL", 
-      full_name: `${user.first_name} ${user.last_name}`.trim(), // 👈 MEJORA AQUÍ
-      role: user.role,
-      session_id: user.session_id
-    };
+    if (!user.is_active) {
+      console.log("❌ [DEBUG] Usuario inactivo.");
+      return res.status(401).json({ message: "Cuenta deshabilitada." });
+    }
 
+    req.user = { id: user.id, company_id: user.company_id, role: user.role };
+    console.log("🚀 [DEBUG] Acceso Concedido.");
     next();
 
   } catch (error) {
-    console.error("Error en Auth Middleware:", error);
-    return res.status(401).json({ message: "Token inválido o expirado" });
+    console.error("❌ [DEBUG ERROR FATAL]:", error.name, "->", error.message);
+    return res.status(401).json({ message: "Error de autenticación" });
   }
 };
 
-/**
- * 🚩 NUEVA MEJORA: Middleware de Autorización para Edición
- * Permite el paso solo a ROOT y ADMIN_CLIENT
- */
 export const authorizeEditor = (req, res, next) => {
+  if (!req.user) return res.status(500).json({ message: "Error de servidor" });
   const { role } = req.user;
-  
-  if (role === 'ROOT' || role === 'ADMIN_CLIENT') {
-    return next();
-  }
-  
-  return res.status(403).json({ 
-    message: "Permisos insuficientes. Solo administradores pueden realizar esta acción." 
-  });
+  if (['ROOT', 'ADMIN_CLIENTE'].includes(role)) return next();
+  return res.status(403).json({ message: "Acceso denegado" });
 };
 
 export default authMiddleware;

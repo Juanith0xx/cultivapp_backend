@@ -1,3 +1,6 @@
+import dotenv from "dotenv" // 👈 1. Importar dotenv
+dotenv.config()           // 👈 2. Cargar las variables YA
+
 import express from "express"
 import cors from "cors"
 import path from "path"
