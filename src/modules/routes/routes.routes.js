@@ -1,7 +1,7 @@
-import { Router } from "express"
-import auth from "../../middlewares/auth.js"
-import roleGuard from "../../middlewares/roleGuard.js"
-import upload from "../../middlewares/upload.js" 
+import { Router } from "express";
+import auth from "../../middlewares/auth.js";
+import roleGuard from "../../middlewares/roleGuard.js";
+import upload from "../../middlewares/upload.js"; 
 
 import {
   createRoute,      
@@ -15,58 +15,110 @@ import {
   saveVisitPhoto,
   getLiveMonitoring, 
   finishVisit,
-  addVisitScan // 🚩 IMPORTANTE: Agregamos la nueva función del controlador
-} from "./routes.controller.js"
+  addVisitScan,
+  getAttendanceReport // 🚩 Nuevo controlador para el Dashboard
+} from "./routes.controller.js";
 
-const router = Router()
+const router = Router();
 
 /* =========================================================
-   1. RUTAS ESTÁTICAS (Sin parámetros :id)
+   1. RUTAS DE MONITOREO Y REPORTES (SUPERVISOR / ADMIN)
 ========================================================= */
 
-// Mi agenda (Mercaderista / ROOT para pruebas)
+/**
+ * 📊 REPORTE DE ASISTENCIA (Control de Jornada)
+ * URL: GET /api/routes/attendance-report
+ */
 router.get(
-  "/my-tasks", 
+  "/attendance-report", 
   auth, 
-  roleGuard("USUARIO", "ADMIN_CLIENTE", "ROOT"), 
-  getMyTasks
-)
+  roleGuard("SUPERVISOR", "ADMIN_CLIENTE", "ROOT"), 
+  getAttendanceReport
+);
 
-// 📍 Monitoreo GPS en tiempo real (Para el mapa del Admin)
+/**
+ * 📍 MONITOREO GPS EN TIEMPO REAL (Mapa en vivo)
+ */
 router.get(
   "/monitoring/live",
   auth,
-  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"),
   getLiveMonitoring
-)
+);
 
-// Listado general de rutas
+/**
+ * 📋 GESTIÓN GENERAL DE RUTAS
+ */
 router.get(
   "/", 
   auth, 
-  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
   getRoutes
-)
+);
 
-// Crear ruta
 router.post(
   "/", 
   auth, 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
   createRoute
-)
+);
 
 /* =========================================================
-   2. RUTAS DINÁMICAS ESPECÍFICAS
+   2. OPERACIONES DEL MERCADERISTA (USUARIO)
+========================================================= */
+
+// Mi agenda diaria
+router.get(
+  "/my-tasks", 
+  auth, 
+  roleGuard("USUARIO", "ADMIN_CLIENTE", "ROOT"), 
+  getMyTasks
+);
+
+// Check-in con GPS (Actualiza estado a IN_PROGRESS)
+router.post(
+  "/:id/check-in", 
+  auth, 
+  roleGuard("USUARIO", "ROOT"), 
+  checkIn
+);
+
+// Finalizar visita (Check-out)
+router.post(
+  "/:id/finish",
+  auth,
+  roleGuard("USUARIO", "ROOT"),
+  finishVisit
+);
+
+// Evidencia fotográfica
+router.post(
+  "/:id/photo", 
+  auth, 
+  roleGuard("USUARIO", "ROOT"), 
+  upload.single("foto"), 
+  saveVisitPhoto
+);
+
+// Escaneo de productos (Barcode)
+router.post(
+  "/:id/scans",
+  auth,
+  roleGuard("USUARIO", "ROOT"),
+  addVisitScan
+);
+
+/* =========================================================
+   3. GESTIÓN DINÁMICA (ADMIN / ROOT)
 ========================================================= */
 
 // Rutas por usuario específico
 router.get(
   "/user/:userId", 
   auth, 
-  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
   getRoutesByUser
-)
+);
 
 // Resetear visita a PENDIENTE
 router.post(
@@ -74,51 +126,7 @@ router.post(
   auth,
   roleGuard("ROOT", "ADMIN_CLIENTE"),
   resetCheckIn
-)
-
-/* =========================================================
-   3. OPERACIONES POR ID Y EVIDENCIAS
-========================================================= */
-
-/**
- * 📸 EVIDENCIA FOTOGRÁFICA (MEJORADA PARA SAAS)
- * URL: POST /api/routes/:id/photo
- */
-router.post(
-  "/:id/photo", 
-  auth, 
-  roleGuard("USUARIO", "ROOT"), 
-  upload.single("foto"), 
-  saveVisitPhoto
-)
-
-/**
- * 🛒 REGISTRO DE ESCANEO DE PRODUCTOS (EAN/BARCODE)
- * URL: POST /api/routes/:id/scans
- * Esta es la ruta que tu iPhone está buscando y daba Error 404
- */
-router.post(
-  "/:id/scans",
-  auth,
-  roleGuard("USUARIO", "ROOT"),
-  addVisitScan // 🚩 Llamamos a la lógica para guardar en public.visit_scans
-)
-
-// ✅ Finalizar visita (Check-out)
-router.post(
-  "/:id/finish",
-  auth,
-  roleGuard("USUARIO", "ROOT"),
-  finishVisit
-)
-
-// Check-in con GPS
-router.post(
-  "/:id/check-in", 
-  auth, 
-  roleGuard("USUARIO", "ROOT"), 
-  checkIn
-)
+);
 
 // Editar una ruta
 router.put(
@@ -126,7 +134,7 @@ router.put(
   auth, 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
   updateRoute
-)
+);
 
 // Eliminar ruta
 router.delete(
@@ -134,6 +142,6 @@ router.delete(
   auth, 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
   deleteRoute
-)
+);
 
-export default router
+export default router;

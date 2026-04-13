@@ -22,15 +22,20 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
    OPERACIÓN MERCADERISTA
 ========================================================= */
 
+/**
+ * 🚩 CHECK-IN AUTOMATIZADO
+ */
 export const checkIn = async (req, res) => {
   try {
     const { id } = req.params;
     const { lat_in, lng_in } = req.body;
-    const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
+    const { company_id, role } = req.user;
+    const isRoot = role === 'ROOT';
+    const targetCompanyId = isRoot ? (req.body.company_id || company_id) : company_id;
 
     if (!lat_in || !lng_in) return res.status(400).json({ message: "GPS incompleto" });
 
-    const route = await routeService.getRouteDetail(id, company_id);
+    const route = await routeService.getRouteDetail(id, targetCompanyId);
     if (!route) return res.status(404).json({ message: "Ruta no encontrada." });
 
     const distance = calculateDistance(
@@ -39,56 +44,59 @@ export const checkIn = async (req, res) => {
     );
 
     const isValidGps = distance <= 3000; 
-    const result = await routeService.registerCheckInWithGps({
-      id, company_id, lat_in: parseFloat(lat_in), lng_in: parseFloat(lng_in),
-      distance_meters: Math.round(distance), is_valid_gps: isValidGps
-    });
 
-    res.json({ isValid: isValidGps, message: isValidGps ? "Check-in exitoso" : `Fuera de rango (${Math.round(distance)}m)`, data: result });
+    const query = `
+      UPDATE public.user_routes 
+      SET 
+        status = 'IN_PROGRESS', 
+        check_in = CURRENT_TIMESTAMP, 
+        lat_in = $1, 
+        lng_in = $2,
+        distance_meters = $3,
+        is_valid_gps = $4,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $5 ${!isRoot ? 'AND company_id = $6' : ''}
+      RETURNING *;
+    `;
+    
+    const params = [parseFloat(lat_in), parseFloat(lng_in), Math.round(distance), isValidGps, id];
+    if (!isRoot) params.push(targetCompanyId);
+
+    const result = await db.query(query, params);
+
+    res.json({ 
+      isValid: isValidGps, 
+      message: isValidGps ? "Check-in exitoso" : `Fuera de rango (${Math.round(distance)}m)`, 
+      data: result.rows[0] 
+    });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 };
 
 /**
- * 🛒 REGISTRO DE ESCANEO DE PRODUCTOS (NUEVO)
- * Guarda el código de barras asociado a la visita y la empresa
+ * 🛒 ESCANEO DE PRODUCTOS
  */
 export const addVisitScan = async (req, res) => {
   try {
-    const { id } = req.params; // visit_id
+    const { id } = req.params; 
     const { barcode } = req.body;
     const companyId = req.user.company_id;
 
-    if (!barcode) {
-      return res.status(400).json({ message: "Código de barras requerido." });
-    }
-
     const query = `
-      INSERT INTO public.visit_scans (
-        visit_id, 
-        company_id, 
-        barcode, 
-        scanned_at
-      ) 
-      VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
-      RETURNING *;
+      INSERT INTO public.visit_scans (visit_id, company_id, barcode, scanned_at) 
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING *;
     `;
-    
-    const params = [id, companyId, barcode];
-    const result = await db.query(query, params);
-
-    res.status(201).json({ 
-      success: true, 
-      message: "Producto registrado exitosamente",
-      data: result.rows[0] 
-    });
+    const result = await db.query(query, [id, companyId, barcode]);
+    res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
-    console.error("❌ ERROR EN ADD_VISIT_SCAN:", error.message);
-    res.status(500).json({ message: "Error al registrar escaneo: " + error.message });
+    res.status(500).json({ message: error.message });
   }
 };
 
+/**
+ * 🏁 FINALIZAR VISITA (Check-out)
+ */
 export const finishVisit = async (req, res) => {
   try {
     const { id } = req.params;
@@ -103,8 +111,6 @@ export const finishVisit = async (req, res) => {
     `;
     const params = !isRoot ? [id, company_id] : [id];
     const result = await db.query(query, params);
-
-    if (result.rowCount === 0) return res.status(404).json({ message: "No autorizado o ruta inexistente" });
     res.json({ success: true, message: "Visita finalizada", data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -126,15 +132,68 @@ export const getMyTasks = async (req, res) => {
 };
 
 /* =========================================================
-   GESTIÓN ADMIN / ROOT
+   GESTIÓN ADMIN / ROOT / SUPERVISOR
 ========================================================= */
+
+/**
+ * 📊 REPORTE DE ASISTENCIA MEJORADO
+ * 1. Muestra Local y Código del local (codigo_local).
+ * 2. Calcula Tiempo Real de Trabajo (Check-out - Check-in).
+ * 3. Soporta rutas recurrentes y por fecha.
+ */
+export const getAttendanceReport = async (req, res) => {
+  try {
+    const { company_id, role } = req.user;
+    const targetCompanyId = (role === 'ROOT' && req.query.company_id) 
+      ? req.query.company_id 
+      : company_id;
+
+    if (!targetCompanyId) return res.status(400).json({ message: "ID de empresa requerido" });
+
+    const query = `
+      SELECT 
+        r.id, 
+        u.first_name, 
+        u.last_name, 
+        u.rut as worker_id, 
+        l.cadena as local_name, 
+        l.codigo_local as local_code, -- ✅ Usando nombre real de columna
+        c.name as commune, 
+        r.status,
+        TO_CHAR(r.start_time, 'HH24:MI') as plan_in, 
+        TO_CHAR(r.check_in, 'HH24:MI') as check_in,
+        -- ✅ Tiempo Real de Trabajo (en minutos)
+        CASE 
+          WHEN r.check_in IS NOT NULL AND r.check_out IS NOT NULL 
+          THEN ROUND(EXTRACT(EPOCH FROM (r.check_out - r.check_in))/60)
+          ELSE NULL 
+        END as working_time,
+        ROUND(EXTRACT(EPOCH FROM (r.check_in::time - r.start_time::time))/60) as diff 
+      FROM public.user_routes r 
+      JOIN public.users u ON r.user_id = u.id 
+      JOIN public.locales l ON r.local_id = l.id 
+      JOIN public.comunas c ON l.comuna_id = c.id 
+      WHERE r.company_id = $1 
+        AND r.deleted_at IS NULL 
+        AND (
+          r.visit_date = CURRENT_DATE 
+          OR (r.is_recurring = true AND r.day_of_week = EXTRACT(DOW FROM CURRENT_DATE))
+        )
+      ORDER BY r.start_time ASC;
+    `;
+
+    const result = await db.query(query, [targetCompanyId]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ ERROR REPORTE ASISTENCIA:", error.message);
+    res.status(500).json({ message: "Error al generar reporte" });
+  }
+};
 
 export const createRoute = async (req, res) => {
   try {
     const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
     const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
-
-    if (!company_id) return res.status(400).json({ message: "Empresa requerida" });
 
     let tasks = [];
     if (is_recurring && selectedDays?.length > 0) {
@@ -180,11 +239,9 @@ export const updateRoute = async (req, res) => {
   try {
     const { id } = req.params;
     const { company_id, role } = req.user;
-    const isRoot = role === 'ROOT';
-    
     const result = await routeService.updateRoute(id, { 
       ...req.body, 
-      company_id: isRoot ? (req.body.company_id || null) : company_id 
+      company_id: role === 'ROOT' ? (req.body.company_id || null) : company_id 
     });
     res.json({ data: result });
   } catch (error) {
@@ -197,14 +254,14 @@ export const deleteRoute = async (req, res) => {
     const { id } = req.params;
     const { company_id, role } = req.user;
     const result = await routeService.deleteRoute(role === 'ROOT' ? null : company_id, id);
-    res.json({ success: true, message: "Ruta eliminada", result });
+    res.json({ success: true, result });
   } catch (error) {
     res.status(400).json({ message: "Error al eliminar" });
   }
 };
 
 /* =========================================================
-   📸 EVIDENCIAS Y MONITOREO GPS (MEJORADO SAAS)
+   📸 MONITOREO Y EVIDENCIAS
 ========================================================= */
 
 export const saveVisitPhoto = async (req, res) => {
@@ -212,83 +269,38 @@ export const saveVisitPhoto = async (req, res) => {
     const routeId = req.params.id || req.body.visit_id; 
     const { tipo_evidencia } = req.body;
     const companyId = req.user.company_id; 
-
-    if (!req.file) {
-      return res.status(400).json({ message: "No se recibió imagen o formato inválido." });
-    }
-
+    if (!req.file) return res.status(400).json({ message: "Imagen requerida" });
     const filePath = req.file.path.replace(/\\/g, "/"); 
-
-    const query = `
-      INSERT INTO public.visit_photos (
-        visit_id, 
-        company_id, 
-        image_url, 
-        evidence_type, 
-        created_at
-      ) 
-      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
-      RETURNING *;
-    `;
-    
-    const params = [routeId, companyId, filePath, tipo_evidencia || 'otros'];
-    const result = await db.query(query, params);
-
-    res.status(201).json({ 
-      success: true, 
-      message: "Evidencia guardada exitosamente",
-      photo: result.rows[0] 
-    });
+    const query = `INSERT INTO public.visit_photos (visit_id, company_id, image_url, evidence_type, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING *;`;
+    const result = await db.query(query, [routeId, companyId, filePath, tipo_evidencia || 'otros']);
+    res.status(201).json({ success: true, photo: result.rows[0] });
   } catch (error) {
-    console.error("❌ ERROR EN SAVE_VISIT_PHOTO:", error.message);
-    res.status(500).json({ message: "Error al guardar evidencia: " + error.message });
+    res.status(500).json({ message: error.message });
   }
 };
 
 export const getLiveMonitoring = async (req, res) => {
   try {
     const { company_id, role } = req.user;
-    const isRoot = role === 'ROOT';
-    const filterCompany = isRoot ? (req.query.company_id || null) : company_id;
-
+    const filterCompany = role === 'ROOT' ? (req.query.company_id || null) : company_id;
     const query = `
-      SELECT 
-        u.id as user_id, u.first_name, u.last_name, 
-        r.id as route_id, r.status, r.lat_in, r.lng_in,
-        r.check_in as active_since, 
-        COALESCE(l.cadena, 'Sin nombre') as local_nombre
-      FROM public.users u
-      INNER JOIN public.user_routes r ON u.id = r.user_id
-      LEFT JOIN public.locales l ON r.local_id = l.id
-      WHERE r.status = 'IN_PROGRESS' 
-      AND r.lat_in IS NOT NULL
-      ${filterCompany ? 'AND r.company_id = $1' : ''}
-      ORDER BY r.check_in DESC
+      SELECT u.id as user_id, u.first_name, u.last_name, r.id as route_id, r.status, r.lat_in, r.lng_in, r.check_in as active_since, COALESCE(l.cadena, 'Sin nombre') as local_nombre
+      FROM public.users u JOIN public.user_routes r ON u.id = r.user_id LEFT JOIN public.locales l ON r.local_id = l.id
+      WHERE r.status = 'IN_PROGRESS' AND r.lat_in IS NOT NULL ${filterCompany ? 'AND r.company_id = $1' : ''} ORDER BY r.check_in DESC;
     `;
-
-    const params = filterCompany ? [filterCompany] : [];
-    const result = await db.query(query, params);
-    const data = result.rows.map(row => ({
-      ...row, lat_in: parseFloat(row.lat_in), lng_in: parseFloat(row.lng_in)
-    }));
-    res.json(data);
+    const result = await db.query(query, filterCompany ? [filterCompany] : []);
+    res.json(result.rows.map(row => ({ ...row, lat_in: parseFloat(row.lat_in), lng_in: parseFloat(row.lng_in) })));
   } catch (error) {
-    res.status(500).json({ message: "Error en monitoreo multi-tenant" });
+    res.status(500).json({ message: "Error en monitoreo" });
   }
 };
-
-/* =========================================================
-   🔄 OTROS
-========================================================= */
 
 export const resetCheckIn = async (req, res) => {
   try {
     const { id } = req.params;
     const { company_id, role } = req.user;
-    const targetCompanyId = role === 'ROOT' ? null : company_id;
-
-    const result = await routeService.resetRouteStatus(id, targetCompanyId);
-    res.json({ success: true, message: "Ruta reseteada", data: result });
+    const result = await routeService.resetRouteStatus(id, role === 'ROOT' ? null : company_id);
+    res.json({ success: true, data: result });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
