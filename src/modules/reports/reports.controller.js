@@ -2,55 +2,72 @@ import pool from "../../database/db.js";
 
 /**
  * 📸 OBTIENE LA AUDITORÍA FOTOGRÁFICA
+ * Optimización: Uso de company_id directo en visit_photos y blindaje de parámetros.
  */
 export const getPhotoAudit = async (req, res) => {
   try {
     const { role, company_id: userCompanyId } = req.user;
-    const { empresa_id, cadena, fecha, search } = req.query;
+    let { empresa_id, cadena, fecha, search } = req.query;
+
+    // --- 🛡️ BLINDAJE DE PARÁMETROS (Anti "[object Object]") ---
+    const isInvalid = (val) => !val || val === "[object Object]" || val === "undefined" || val === "null";
+
+    if (isInvalid(empresa_id)) {
+      empresa_id = (role !== 'ROOT') ? userCompanyId : null;
+    }
+
+    // Si es ROOT y no hay ID de empresa, retornamos vacío para no romper el SQL
+    if (role === 'ROOT' && !empresa_id) return res.json([]);
 
     let query = `
       SELECT 
         vp.id,
-        vp.image_url AS photo_url,
+        vp.image_url AS photo_url, -- ✅ Mapeado para el Frontend
         vp.evidence_type AS photo_type,
         vp.created_at,
         CONCAT(u.first_name, ' ', u.last_name) AS user_name,
         u.rut AS user_rut,
         l.cadena,
-        l.direccion AS local_nombre,
+        l.direccion AS local_nombre, 
+        l.codigo_local AS local_codigo,
         c.name AS empresa_nombre
-      FROM visit_photos vp
-      JOIN user_routes r ON vp.visit_id = r.id
-      JOIN users u ON r.user_id = u.id
-      JOIN locales l ON r.local_id = l.id
-      JOIN companies c ON u.company_id = c.id
-      WHERE 1=1
+      FROM public.visit_photos vp
+      JOIN public.user_routes r ON vp.visit_id = r.id
+      JOIN public.users u ON r.user_id = u.id
+      JOIN public.locales l ON r.local_id = l.id
+      JOIN public.companies c ON vp.company_id = c.id -- ✅ JOIN directo por company_id de la foto
+      WHERE vp.company_id = $1 -- ✅ Filtro directo (más eficiente)
     `;
 
-    const queryParams = [];
+    const queryParams = [empresa_id];
 
-    if (role !== 'ROOT') {
-      queryParams.push(userCompanyId);
-      query += ` AND u.company_id = $${queryParams.length}`;
-    } else if (empresa_id) {
-      queryParams.push(empresa_id);
-      query += ` AND u.company_id = $${queryParams.length}`;
-    }
+    /**
+     * 🚩 LÓGICA DE BÚSQUEDA GLOBAL
+     * Priorizamos el buscador por sobre la fecha.
+     */
+    const cleanSearch = !isInvalid(search) ? search.trim() : "";
 
-    if (cadena) {
-      queryParams.push(cadena);
-      query += ` AND l.cadena = $${queryParams.length}`;
-    }
-
-    if (fecha) {
-      queryParams.push(fecha);
+    if (cleanSearch !== "") {
+      queryParams.push(`%${cleanSearch}%`);
+      const pIdx = queryParams.length;
+      query += ` AND (
+        u.first_name ILIKE $${pIdx} OR 
+        u.last_name ILIKE $${pIdx} OR 
+        u.rut ILIKE $${pIdx} OR
+        l.direccion ILIKE $${pIdx} OR
+        l.codigo_local ILIKE $${pIdx}
+      )`;
+    } else {
+      // Si no hay búsqueda de texto, filtramos por la fecha
+      const dateToFilter = !isInvalid(fecha) ? fecha : new Date().toISOString().split('T')[0];
+      queryParams.push(dateToFilter);
       query += ` AND vp.created_at::date = $${queryParams.length}`;
     }
 
-    if (search && search.trim() !== "") {
-      queryParams.push(`%${search}%`);
-      const pIdx = queryParams.length;
-      query += ` AND (u.first_name ILIKE $${pIdx} OR u.last_name ILIKE $${pIdx} OR u.rut ILIKE $${pIdx})`;
+    // Filtro opcional por cadena
+    if (!isInvalid(cadena)) {
+      queryParams.push(cadena);
+      query += ` AND l.cadena = $${queryParams.length}`;
     }
 
     query += ` ORDER BY vp.created_at DESC LIMIT 200`;
@@ -59,14 +76,16 @@ export const getPhotoAudit = async (req, res) => {
     res.json(result.rows);
 
   } catch (error) {
-    console.error("❌ Error en getPhotoAudit:", error);
-    res.status(500).json({ message: "Error al obtener auditoría", error: error.message });
+    console.error("❌ Error Crítico en getPhotoAudit:", error.message);
+    res.status(500).json({ 
+      message: "Error interno al procesar auditoría", 
+      details: error.message 
+    });
   }
 };
 
 /**
- * 📝 ACTUALIZA UNA EVIDENCIA (Solo ROOT y ADMIN_CLIENT)
- * Esta es la función que te faltaba y causaba el SyntaxError
+ * 📝 ACTUALIZA UNA EVIDENCIA
  */
 export const updateVisitPhoto = async (req, res) => {
   const { id } = req.params;
@@ -74,28 +93,19 @@ export const updateVisitPhoto = async (req, res) => {
   const { photo_type } = req.body;
 
   try {
-    // 1. Verificar propiedad (Seguridad para ADMIN_CLIENT)
-    const checkQuery = `
-      SELECT u.company_id 
-      FROM visit_photos vp
-      JOIN user_routes r ON vp.visit_id = r.id
-      JOIN users u ON r.user_id = u.id
-      WHERE vp.id = $1
-    `;
+    const checkQuery = `SELECT company_id FROM public.visit_photos WHERE id = $1`;
     const check = await pool.query(checkQuery, [id]);
 
     if (check.rows.length === 0) {
       return res.status(404).json({ message: "Evidencia no encontrada" });
     }
 
-    // 🚩 Si es ADMIN_CLIENT, no puede editar fotos de otras empresas
     if (role === 'ADMIN_CLIENT' && check.rows[0].company_id !== userCompanyId) {
-      return res.status(403).json({ message: "No tienes permiso para editar este registro" });
+      return res.status(403).json({ message: "Sin permisos sobre este registro" });
     }
 
-    // 2. Ejecutar actualización
     const updateQuery = `
-      UPDATE visit_photos 
+      UPDATE public.visit_photos 
       SET evidence_type = $1, updated_at = NOW() 
       WHERE id = $2 
       RETURNING *
@@ -103,12 +113,12 @@ export const updateVisitPhoto = async (req, res) => {
     const result = await pool.query(updateQuery, [photo_type, id]);
 
     res.json({
-      message: "Evidencia actualizada con éxito",
+      message: "Actualizado con éxito",
       data: result.rows[0]
     });
 
   } catch (error) {
     console.error("❌ Error en updateVisitPhoto:", error);
-    res.status(500).json({ message: "Error interno al actualizar", error: error.message });
+    res.status(500).json({ message: "Error interno", error: error.message });
   }
 };

@@ -22,9 +22,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
    OPERACIÓN MERCADERISTA
 ========================================================= */
 
-/**
- * 🚩 CHECK-IN AUTOMATIZADO
- */
 export const checkIn = async (req, res) => {
   try {
     const { id } = req.params;
@@ -63,40 +60,12 @@ export const checkIn = async (req, res) => {
     if (!isRoot) params.push(targetCompanyId);
 
     const result = await db.query(query, params);
-
-    res.json({ 
-      isValid: isValidGps, 
-      message: isValidGps ? "Check-in exitoso" : `Fuera de rango (${Math.round(distance)}m)`, 
-      data: result.rows[0] 
-    });
+    res.json({ isValid: isValidGps, data: result.rows[0] });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 };
 
-/**
- * 🛒 ESCANEO DE PRODUCTOS
- */
-export const addVisitScan = async (req, res) => {
-  try {
-    const { id } = req.params; 
-    const { barcode } = req.body;
-    const companyId = req.user.company_id;
-
-    const query = `
-      INSERT INTO public.visit_scans (visit_id, company_id, barcode, scanned_at) 
-      VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING *;
-    `;
-    const result = await db.query(query, [id, companyId, barcode]);
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-/**
- * 🏁 FINALIZAR VISITA (Check-out)
- */
 export const finishVisit = async (req, res) => {
   try {
     const { id } = req.params;
@@ -111,7 +80,7 @@ export const finishVisit = async (req, res) => {
     `;
     const params = !isRoot ? [id, company_id] : [id];
     const result = await db.query(query, params);
-    res.json({ success: true, message: "Visita finalizada", data: result.rows[0] });
+    res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -136,27 +105,25 @@ export const getMyTasks = async (req, res) => {
 ========================================================= */
 
 /**
- * 📊 REPORTE DE ASISTENCIA MEJORADO
+ * 📊 REPORTE DE ASISTENCIA E HISTORIAL MEJORADO
+ * Soporta búsqueda global (search) y filtrado por fecha (date).
  */
 export const getAttendanceReport = async (req, res) => {
   try {
     const { company_id, role } = req.user;
+    const { date, search } = req.query;
+    
     const targetCompanyId = (role === 'ROOT' && req.query.company_id) 
       ? req.query.company_id 
       : company_id;
 
     if (!targetCompanyId) return res.status(400).json({ message: "ID de empresa requerido" });
 
-    const query = `
+    let query = `
       SELECT 
-        r.id, 
-        u.first_name, 
-        u.last_name, 
-        u.rut as worker_id, 
-        l.cadena as local_name, 
-        l.codigo_local as local_code, 
-        c.name as commune, 
-        r.status,
+        r.id, u.first_name, u.last_name, u.rut as worker_id, 
+        l.cadena as local_name, l.codigo_local as local_code, r.status,
+        r.visit_date, -- 🚩 Necesario para mostrar la fecha en el historial
         TO_CHAR(r.start_time, 'HH24:MI') as plan_in, 
         TO_CHAR(r.check_in, 'HH24:MI') as check_in,
         CASE 
@@ -168,19 +135,34 @@ export const getAttendanceReport = async (req, res) => {
       FROM public.user_routes r 
       JOIN public.users u ON r.user_id = u.id 
       JOIN public.locales l ON r.local_id = l.id 
-      JOIN public.comunas c ON l.comuna_id = c.id 
-      WHERE r.company_id = $1 
-        AND r.deleted_at IS NULL 
-        AND (
-          -- 🚩 MEJORA: Incluir registros que tuvieron actividad hoy
-          DATE(r.check_in) = CURRENT_DATE 
-          OR r.visit_date = CURRENT_DATE 
-          OR (r.is_recurring = true AND r.day_of_week = EXTRACT(DOW FROM CURRENT_DATE))
-        )
-      ORDER BY r.start_time ASC;
+      WHERE r.company_id = $1 AND r.deleted_at IS NULL
     `;
 
-    const result = await db.query(query, [targetCompanyId]);
+    const params = [targetCompanyId];
+
+    // 🚩 LÓGICA DE BÚSQUEDA GLOBAL (Ignora fecha si hay término de búsqueda)
+    if (search && search.trim().length > 2) {
+      query += ` AND (
+        u.first_name ILIKE $2 OR 
+        u.last_name ILIKE $2 OR 
+        l.cadena ILIKE $2 OR 
+        l.codigo_local ILIKE $2
+      )`;
+      params.push(`%${search}%`);
+    } else {
+      // Filtrado normal por fecha (Hoy o Historial)
+      const reportDate = date || new Date().toISOString().split('T')[0];
+      query += ` AND (
+        DATE(r.check_in) = $2 OR 
+        r.visit_date = $2 OR 
+        (r.is_recurring = true AND r.day_of_week = EXTRACT(DOW FROM $2::date))
+      )`;
+      params.push(reportDate);
+    }
+
+    query += ` ORDER BY r.visit_date DESC, r.start_time ASC`;
+
+    const result = await db.query(query, params);
     res.json(result.rows);
   } catch (error) {
     console.error("❌ ERROR REPORTE ASISTENCIA:", error.message);
@@ -211,95 +193,64 @@ export const createRoute = async (req, res) => {
   }
 };
 
-export const getRoutes = async (req, res) => {
-  try {
-    const { company_id, role } = req.user;
-    const filterCompany = role === 'ROOT' ? (req.query.company_id || null) : company_id;
-    const routes = await routeService.getRoutesByCompany(filterCompany);
-    res.json(routes || []);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
 export const getRoutesByUser = async (req, res) => {
   try {
     const { company_id, role } = req.user;
+    const { userId } = req.params;
     const filterCompany = role === 'ROOT' ? null : company_id;
-    const routes = await routeService.getRoutesByUser(filterCompany, req.params.userId);
+    const routes = await routeService.getRoutesByUser(filterCompany, userId);
     res.json(routes || []);
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 };
 
-export const updateRoute = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { company_id, role } = req.user;
-    const result = await routeService.updateRoute(id, { 
-      ...req.body, 
-      company_id: role === 'ROOT' ? (req.body.company_id || null) : company_id 
-    });
-    res.json({ data: result });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
+export const getRoutes = (req, res) => 
+  routeService.getRoutesByCompany(req.user.role === 'ROOT' ? req.query.company_id : req.user.company_id).then(r => res.json(r));
 
-export const deleteRoute = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { company_id, role } = req.user;
-    const result = await routeService.deleteRoute(role === 'ROOT' ? null : company_id, id);
-    res.json({ success: true, result });
-  } catch (error) {
-    res.status(400).json({ message: "Error al eliminar" });
-  }
-};
+export const updateRoute = (req, res) => 
+  routeService.updateRoute(req.params.id, req.body).then(r => res.json(r));
 
-/* =========================================================
-   📸 MONITOREO Y EVIDENCIAS
-========================================================= */
-
-export const saveVisitPhoto = async (req, res) => {
-  try {
-    const routeId = req.params.id || req.body.visit_id; 
-    const { tipo_evidencia } = req.body;
-    const companyId = req.user.company_id; 
-    if (!req.file) return res.status(400).json({ message: "Imagen requerida" });
-    const filePath = req.file.path.replace(/\\/g, "/"); 
-    const query = `INSERT INTO public.visit_photos (visit_id, company_id, image_url, evidence_type, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING *;`;
-    const result = await db.query(query, [routeId, companyId, filePath, tipo_evidencia || 'otros']);
-    res.status(201).json({ success: true, photo: result.rows[0] });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+export const deleteRoute = (req, res) => 
+  routeService.deleteRoute(req.user.company_id, req.params.id).then(r => res.json(r));
 
 export const getLiveMonitoring = async (req, res) => {
   try {
     const { company_id, role } = req.user;
     const filterCompany = role === 'ROOT' ? (req.query.company_id || null) : company_id;
     const query = `
-      SELECT u.id as user_id, u.first_name, u.last_name, r.id as route_id, r.status, r.lat_in, r.lng_in, r.check_in as active_since, COALESCE(l.cadena, 'Sin nombre') as local_nombre
+      SELECT u.id as user_id, u.first_name, u.last_name, r.id as route_id, r.status, r.lat_in, r.lng_in, r.check_in as active_since, COALESCE(l.cadena, 'S/N') as local_nombre
       FROM public.users u JOIN public.user_routes r ON u.id = r.user_id LEFT JOIN public.locales l ON r.local_id = l.id
-      WHERE r.status = 'IN_PROGRESS' AND r.lat_in IS NOT NULL ${filterCompany ? 'AND r.company_id = $1' : ''} ORDER BY r.check_in DESC;
+      WHERE r.status = 'IN_PROGRESS' ${filterCompany ? 'AND r.company_id = $1' : ''} ORDER BY r.check_in DESC;
     `;
     const result = await db.query(query, filterCompany ? [filterCompany] : []);
-    res.json(result.rows.map(row => ({ ...row, lat_in: parseFloat(row.lat_in), lng_in: parseFloat(row.lng_in) })));
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ message: "Error en monitoreo" });
   }
 };
 
-export const resetCheckIn = async (req, res) => {
+export const saveVisitPhoto = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { company_id, role } = req.user;
-    const result = await routeService.resetRouteStatus(id, role === 'ROOT' ? null : company_id);
-    res.json({ success: true, data: result });
+    const routeId = req.params.id;
+    const { tipo_evidencia } = req.body;
+    const query = `INSERT INTO public.visit_photos (visit_id, company_id, image_url, evidence_type) VALUES ($1, $2, $3, $4) RETURNING *;`;
+    const result = await db.query(query, [routeId, req.user.company_id, req.file.path, tipo_evidencia]);
+    res.status(201).json(result.rows[0]);
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const resetCheckIn = (req, res) => 
+  routeService.resetRouteStatus(req.params.id, req.user.company_id).then(r => res.json(r));
+
+export const addVisitScan = async (req, res) => {
+  try {
+    const query = `INSERT INTO public.visit_scans (visit_id, company_id, barcode) VALUES ($1, $2, $3) RETURNING *;`;
+    const result = await db.query(query, [req.params.id, req.user.company_id, req.body.barcode]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
