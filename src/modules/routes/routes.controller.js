@@ -137,9 +137,6 @@ export const getMyTasks = async (req, res) => {
 
 /**
  * 📊 REPORTE DE ASISTENCIA MEJORADO
- * 1. Muestra Local y Código del local (codigo_local).
- * 2. Calcula Tiempo Real de Trabajo (Check-out - Check-in).
- * 3. Soporta rutas recurrentes y por fecha.
  */
 export const getAttendanceReport = async (req, res) => {
   try {
@@ -157,12 +154,11 @@ export const getAttendanceReport = async (req, res) => {
         u.last_name, 
         u.rut as worker_id, 
         l.cadena as local_name, 
-        l.codigo_local as local_code, -- ✅ Usando nombre real de columna
+        l.codigo_local as local_code, 
         c.name as commune, 
         r.status,
         TO_CHAR(r.start_time, 'HH24:MI') as plan_in, 
         TO_CHAR(r.check_in, 'HH24:MI') as check_in,
-        -- ✅ Tiempo Real de Trabajo (en minutos)
         CASE 
           WHEN r.check_in IS NOT NULL AND r.check_out IS NOT NULL 
           THEN ROUND(EXTRACT(EPOCH FROM (r.check_out - r.check_in))/60)
@@ -176,7 +172,9 @@ export const getAttendanceReport = async (req, res) => {
       WHERE r.company_id = $1 
         AND r.deleted_at IS NULL 
         AND (
-          r.visit_date = CURRENT_DATE 
+          -- 🚩 MEJORA: Incluir registros que tuvieron actividad hoy
+          DATE(r.check_in) = CURRENT_DATE 
+          OR r.visit_date = CURRENT_DATE 
           OR (r.is_recurring = true AND r.day_of_week = EXTRACT(DOW FROM CURRENT_DATE))
         )
       ORDER BY r.start_time ASC;

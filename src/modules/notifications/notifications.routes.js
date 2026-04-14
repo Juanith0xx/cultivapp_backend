@@ -38,28 +38,49 @@ router.put("/:id/read", auth, markAsRead);
 
 /**
  * @route   GET /api/notifications/sent
- * @desc    Obtener historial de notificaciones enviadas (Para el Manager)
- * @access  ROOT, ADMIN_CLIENTE
+ * @desc    Obtener historial de notificaciones enviadas
+ * @access  ROOT, ADMIN_CLIENTE, SUPERVISOR
  */
-router.get("/sent", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), getSentNotifications);
+router.get(
+  "/sent", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
+  getSentNotifications
+);
 
 /**
  * @route   POST /api/notifications/send
  * @desc    Enviar notificación individual o por local
  */
-router.post("/send", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), sendNotification);
+router.post(
+  "/send", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
+  sendNotification
+);
 
 /**
- * @route   POST /api/notifications/send-bulk
+ * @route   POST /api/notifications/bulk
  * @desc    Enviar notificaciones masivas (Bulk)
+ * 🚩 MEJORA: Se cambió de 'send-bulk' a 'bulk' para coincidir con el Frontend.
  */
-router.post("/send-bulk", auth, roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), sendBulkNotifications);
+router.post(
+  "/bulk", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
+  sendBulkNotifications
+);
 
 /**
  * @route   DELETE /api/notifications/:id
- * @desc    Eliminar una notificación (Remitente o ROOT)
- * @access  ROOT, ADMIN_CLIENTE
+ * @desc    Eliminar una notificación
+ * @access  ROOT, ADMIN_CLIENTE, SUPERVISOR
  */
-router.delete("/:id", auth, roleGuard("ROOT", "ADMIN_CLIENTE"), deleteNotification);
+router.delete(
+  "/:id", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
+  deleteNotification
+);
 
 export default router;
