@@ -2,27 +2,28 @@ import pool from "../../database/db.js";
 
 /**
  * 📸 OBTIENE LA AUDITORÍA FOTOGRÁFICA
- * Optimización: Uso de company_id directo en visit_photos y blindaje de parámetros.
+ * Mejora: Joins robustos y prioridad de filtrado por empresa
  */
 export const getPhotoAudit = async (req, res) => {
   try {
     const { role, company_id: userCompanyId } = req.user;
     let { empresa_id, cadena, fecha, search } = req.query;
 
-    // --- 🛡️ BLINDAJE DE PARÁMETROS (Anti "[object Object]") ---
+    // --- 🛡️ BLINDAJE DE PARÁMETROS ---
     const isInvalid = (val) => !val || val === "[object Object]" || val === "undefined" || val === "null";
 
-    if (isInvalid(empresa_id)) {
-      empresa_id = (role !== 'ROOT') ? userCompanyId : null;
+    // Si no es ROOT, la empresa SIEMPRE es la del usuario logueado
+    if (role !== 'ROOT') {
+      empresa_id = userCompanyId;
+    } else if (isInvalid(empresa_id)) {
+      // Si es ROOT y no eligió nada, retornamos vacío para evitar ver fotos de todos mezcladas
+      return res.json([]);
     }
-
-    // Si es ROOT y no hay ID de empresa, retornamos vacío para no romper el SQL
-    if (role === 'ROOT' && !empresa_id) return res.json([]);
 
     let query = `
       SELECT 
         vp.id,
-        vp.image_url AS photo_url, -- ✅ Mapeado para el Frontend
+        vp.image_url AS photo_url,
         vp.evidence_type AS photo_type,
         vp.created_at,
         CONCAT(u.first_name, ' ', u.last_name) AS user_name,
@@ -32,18 +33,18 @@ export const getPhotoAudit = async (req, res) => {
         l.codigo_local AS local_codigo,
         c.name AS empresa_nombre
       FROM public.visit_photos vp
-      JOIN public.user_routes r ON vp.visit_id = r.id
-      JOIN public.users u ON r.user_id = u.id
-      JOIN public.locales l ON r.local_id = l.id
-      JOIN public.companies c ON vp.company_id = c.id -- ✅ JOIN directo por company_id de la foto
-      WHERE vp.company_id = $1 -- ✅ Filtro directo (más eficiente)
+      LEFT JOIN public.user_routes r ON vp.visit_id = r.id
+      LEFT JOIN public.users u ON r.user_id = u.id
+      LEFT JOIN public.locales l ON r.local_id = l.id
+      LEFT JOIN public.companies c ON vp.company_id = c.id
+      WHERE vp.company_id = $1
     `;
 
     const queryParams = [empresa_id];
 
     /**
      * 🚩 LÓGICA DE BÚSQUEDA GLOBAL
-     * Priorizamos el buscador por sobre la fecha.
+     * Si el usuario escribe algo, ignoramos la fecha para buscar en todo el historial.
      */
     const cleanSearch = !isInvalid(search) ? search.trim() : "";
 
@@ -58,13 +59,13 @@ export const getPhotoAudit = async (req, res) => {
         l.codigo_local ILIKE $${pIdx}
       )`;
     } else {
-      // Si no hay búsqueda de texto, filtramos por la fecha
+      // Si no hay búsqueda de texto, aplicamos el filtro de fecha (Hoy o la seleccionada)
       const dateToFilter = !isInvalid(fecha) ? fecha : new Date().toISOString().split('T')[0];
       queryParams.push(dateToFilter);
       query += ` AND vp.created_at::date = $${queryParams.length}`;
     }
 
-    // Filtro opcional por cadena
+    // Filtro por cadena (opcional)
     if (!isInvalid(cadena)) {
       queryParams.push(cadena);
       query += ` AND l.cadena = $${queryParams.length}`;
@@ -73,7 +74,9 @@ export const getPhotoAudit = async (req, res) => {
     query += ` ORDER BY vp.created_at DESC LIMIT 200`;
 
     const result = await pool.query(query, queryParams);
-    res.json(result.rows);
+    
+    // Si no hay resultados, enviamos array vacío en vez de error
+    res.json(result.rows || []);
 
   } catch (error) {
     console.error("❌ Error Crítico en getPhotoAudit:", error.message);
@@ -96,9 +99,7 @@ export const updateVisitPhoto = async (req, res) => {
     const checkQuery = `SELECT company_id FROM public.visit_photos WHERE id = $1`;
     const check = await pool.query(checkQuery, [id]);
 
-    if (check.rows.length === 0) {
-      return res.status(404).json({ message: "Evidencia no encontrada" });
-    }
+    if (check.rows.length === 0) return res.status(404).json({ message: "No encontrada" });
 
     if (role === 'ADMIN_CLIENT' && check.rows[0].company_id !== userCompanyId) {
       return res.status(403).json({ message: "Sin permisos sobre este registro" });
@@ -111,14 +112,8 @@ export const updateVisitPhoto = async (req, res) => {
       RETURNING *
     `;
     const result = await pool.query(updateQuery, [photo_type, id]);
-
-    res.json({
-      message: "Actualizado con éxito",
-      data: result.rows[0]
-    });
-
+    res.json({ message: "Actualizado con éxito", data: result.rows[0] });
   } catch (error) {
-    console.error("❌ Error en updateVisitPhoto:", error);
-    res.status(500).json({ message: "Error interno", error: error.message });
+    res.status(500).json({ message: "Error", error: error.message });
   }
 };

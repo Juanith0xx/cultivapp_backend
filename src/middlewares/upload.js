@@ -4,45 +4,33 @@ import fs from "fs";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // 1. Priorizamos datos del TOKEN (req.user) porque son más fiables que el body
-    const companyName = req.user?.company_name || "default_tenant";
-    
-    // Intentamos obtener el nombre desde: 
-    // a) El body (si el frontend lo envió antes del archivo)
-    // b) El token (si tu middleware inyecta 'first_name' y 'last_name')
-    // c) Un fallback genérico
-    const rawUserName = req.body.user_full_name || 
-                        (req.user?.first_name ? `${req.user.first_name} ${req.user.last_name}` : null) || 
-                        req.user?.full_name || 
-                        "usuario_desconocido";
+    const slugify = (text) => {
+      if (!text || text === "undefined" || text === "null") return null;
+      return text.toLowerCase().trim().normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+    };
 
-    const slugify = (text) => text
-      .toLowerCase()
-      .trim()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9_]/g, "");
+    // 🚩 MEJORA: Buscamos en todas las fuentes posibles
+    // Si req.user no tiene la info, es porque el middleware de auth falló o no inyectó company_name
+    const rawCompany = req.user?.company_name || req.body.company_name || req.headers['x-company-name'];
+    const rawUser = req.user?.full_name || req.body.user_name || req.headers['x-user-name'];
 
-    const safeCompany = slugify(companyName);
-    const safeUser = slugify(rawUserName);
+    const safeCompany = slugify(rawCompany) || "default_tenant";
+    const safeUser = slugify(rawUser) || "usuario_desconocido";
 
-    // Definimos la carpeta base
-    let folder = `uploads/${safeCompany}/${safeUser}/`;
+    // path.join maneja las barras según el SO, pero en web queremos "/"
+    // Forzamos la creación de la ruta
+    let folder = `uploads/${safeCompany}/${safeUser}`;
 
-    if (file.fieldname === "documento_achs") {
-      folder += `doc_achs/`;
-    } 
-    else if (file.fieldname === "foto") { 
+    if (file.fieldname === "foto") { 
       const tipo = req.body.tipo_evidencia || "otros";
-      const mapeoCarpetas = {
-        'fachada': 'foto_local',
-        'gondola_inicio': 'foto_gondola',
-        'gondola_final': 'foto_term_producto',
-        'observaciones': 'observaciones'
+      const mapeo = {
+        'Fachada': 'foto_local',
+        'Góndola Inicio': 'foto_gondola',
+        'Góndola Final': 'foto_term_producto',
+        'Observaciones': 'foto_observaciones'
       };
-      const subCarpeta = mapeoCarpetas[tipo] || "otros";
-      folder += `evidencias/${subCarpeta}/`;
+      folder += `/evidencias/${mapeo[tipo] || "otros"}`;
     }
 
     if (!fs.existsSync(folder)) {
@@ -53,13 +41,10 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
     const ahora = new Date();
-    const fecha = ahora.toISOString().split('T')[0]; 
-    const hora = ahora.getHours().toString().padStart(2, '0') + "h" + 
-                 ahora.getMinutes().toString().padStart(2, '0');
-
-    const routeId = req.params.id || req.body.visit_id || "sin_id";
-    const random = Math.round(Math.random() * 1e3);
-    cb(null, `visita_${routeId}_${fecha}_${hora}_${random}${ext}`);
+    // Nombre de archivo limpio sin caracteres extraños
+    const timestamp = ahora.getTime();
+    const visitId = req.body.visit_id || req.params.id || "sin_id";
+    cb(null, `visita_${visitId}_${timestamp}${ext}`);
   }
 });
 
