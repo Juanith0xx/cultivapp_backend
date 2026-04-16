@@ -50,7 +50,7 @@ router.get(
 
 /**
  * @route   POST /api/notifications/send
- * @desc    Enviar notificación individual o por local
+ * @desc    Enviar notificación individual
  */
 router.post(
   "/send", 
@@ -60,12 +60,12 @@ router.post(
 );
 
 /**
- * @route   POST /api/notifications/bulk
+ * @route   POST /api/notifications/send-bulk
  * @desc    Enviar notificaciones masivas (Bulk)
- * 🚩 MEJORA: Se cambió de 'send-bulk' a 'bulk' para coincidir con el Frontend.
+ * ✅ MEJORA: Se cambió a 'send-bulk' para resolver el error 404 del Frontend.
  */
 router.post(
-  "/bulk", 
+  "/send-bulk", 
   auth, 
   roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
   sendBulkNotifications
@@ -73,7 +73,7 @@ router.post(
 
 /**
  * @route   DELETE /api/notifications/:id
- * @desc    Eliminar una notificación
+ * @desc    Eliminar una notificación (Anular envío)
  * @access  ROOT, ADMIN_CLIENTE, SUPERVISOR
  */
 router.delete(

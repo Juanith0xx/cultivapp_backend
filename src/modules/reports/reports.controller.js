@@ -1,22 +1,84 @@
 import pool from "../../database/db.js";
 
 /**
- * 📸 OBTIENE LA AUDITORÍA FOTOGRÁFICA
- * Mejora: Joins robustos y prioridad de filtrado por empresa
+ * 📊 1. ESTADÍSTICAS PARA EL SEMÁFORO DE COBERTURA
+ * Esta función es la que activará el "1" amarillo en tu panel.
+ */
+export const getDashboardStats = async (req, res) => {
+  try {
+    const { role, company_id: userCompanyId } = req.user;
+    const empresa_id = role === 'ROOT' ? req.query.company_id : userCompanyId;
+
+    // Si no hay empresa definida (siendo ROOT), devolvemos todo en cero
+    if (!empresa_id) {
+      return res.json({ no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0 });
+    }
+
+    // --- LÓGICA DE TIEMPO CHILE ---
+    // Obtenemos la fecha actual en formato YYYY-MM-DD para Chile
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+    
+    // Mapeo de día de la semana (Postgres 0=Dom, JS 0=Dom) 
+    // Lo ajustamos a tu lógica de Planificación (1=Lun, 7=Dom)
+    const dowMap = [7, 1, 2, 3, 4, 5, 6]; 
+    const currentDay = dowMap[new Date().getDay()];
+
+    const query = `
+      WITH daily_routes AS (
+        -- Rutas planificadas para hoy según el día de la semana
+        SELECT id, local_id, user_id FROM public.user_routes 
+        WHERE company_id = $1 AND day_of_week = $2
+      ),
+      daily_visits AS (
+        -- Visitas reales registradas hoy (independiente de la ruta)
+        SELECT route_id, check_in, check_out FROM public.visits 
+        WHERE company_id = $1 AND check_in::date = $3
+      )
+      SELECT 
+        -- 🔴 No Atendidos: Planificados que ni siquiera han iniciado
+        COUNT(dr.id) FILTER (WHERE dv.check_in IS NULL) as no_atendido,
+        
+        -- 🟡 Atendiendo: Tienen Check-in pero NO Check-out (Botón "Continuar" activo)
+        COUNT(dr.id) FILTER (WHERE dv.check_in IS NOT NULL AND dv.check_out IS NULL) as atendiendo,
+        
+        -- 🟢 Atendidos: Visitas finalizadas con Check-out
+        COUNT(dr.id) FILTER (WHERE dv.check_out IS NOT NULL) as atendido,
+
+        -- ⚫ Sin Mercaderista: Locales activos de la empresa sin ruta hoy
+        (SELECT COUNT(*) FROM public.locales l 
+         WHERE l.company_id = $1 AND l.is_active = true
+         AND NOT EXISTS (SELECT 1 FROM daily_routes dr2 WHERE dr2.local_id = l.id)
+        ) as sin_asignacion
+      FROM daily_routes dr
+      LEFT JOIN daily_visits dv ON dr.id = dv.route_id;
+    `;
+
+    const result = await pool.query(query, [empresa_id, currentDay, today]);
+    
+    // Enviamos los datos reales al Semáforo
+    res.json(result.rows[0]);
+
+  } catch (error) {
+    console.error("❌ Error Crítico en getDashboardStats:", error.message);
+    res.status(500).json({ message: "Error al calcular semáforo", error: error.message });
+  }
+};
+
+/**
+ * 📸 2. AUDITORÍA FOTOGRÁFICA (Mejorado)
+ * Ahora con joins precisos y corrección de zona horaria al mostrar la fecha
  */
 export const getPhotoAudit = async (req, res) => {
   try {
     const { role, company_id: userCompanyId } = req.user;
     let { empresa_id, cadena, fecha, search } = req.query;
 
-    // --- 🛡️ BLINDAJE DE PARÁMETROS ---
     const isInvalid = (val) => !val || val === "[object Object]" || val === "undefined" || val === "null";
 
-    // Si no es ROOT, la empresa SIEMPRE es la del usuario logueado
+    // Blindaje de seguridad
     if (role !== 'ROOT') {
       empresa_id = userCompanyId;
     } else if (isInvalid(empresa_id)) {
-      // Si es ROOT y no eligió nada, retornamos vacío para evitar ver fotos de todos mezcladas
       return res.json([]);
     }
 
@@ -25,7 +87,8 @@ export const getPhotoAudit = async (req, res) => {
         vp.id,
         vp.image_url AS photo_url,
         vp.evidence_type AS photo_type,
-        vp.created_at,
+        -- Convertimos la hora de la foto a hora de Chile para el Frontend
+        vp.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago' as created_at,
         CONCAT(u.first_name, ' ', u.last_name) AS user_name,
         u.rut AS user_rut,
         l.cadena,
@@ -33,21 +96,18 @@ export const getPhotoAudit = async (req, res) => {
         l.codigo_local AS local_codigo,
         c.name AS empresa_nombre
       FROM public.visit_photos vp
-      LEFT JOIN public.user_routes r ON vp.visit_id = r.id
-      LEFT JOIN public.users u ON r.user_id = u.id
-      LEFT JOIN public.locales l ON r.local_id = l.id
-      LEFT JOIN public.companies c ON vp.company_id = c.id
+      INNER JOIN public.visits v ON vp.visit_id = v.id
+      INNER JOIN public.user_routes r ON v.route_id = r.id
+      INNER JOIN public.users u ON v.user_id = u.id
+      INNER JOIN public.locales l ON r.local_id = l.id
+      INNER JOIN public.companies c ON vp.company_id = c.id
       WHERE vp.company_id = $1
     `;
 
     const queryParams = [empresa_id];
-
-    /**
-     * 🚩 LÓGICA DE BÚSQUEDA GLOBAL
-     * Si el usuario escribe algo, ignoramos la fecha para buscar en todo el historial.
-     */
     const cleanSearch = !isInvalid(search) ? search.trim() : "";
 
+    // Lógica de búsqueda prioritaria
     if (cleanSearch !== "") {
       queryParams.push(`%${cleanSearch}%`);
       const pIdx = queryParams.length;
@@ -59,36 +119,31 @@ export const getPhotoAudit = async (req, res) => {
         l.codigo_local ILIKE $${pIdx}
       )`;
     } else {
-      // Si no hay búsqueda de texto, aplicamos el filtro de fecha (Hoy o la seleccionada)
-      const dateToFilter = !isInvalid(fecha) ? fecha : new Date().toISOString().split('T')[0];
+      // Si no hay búsqueda, filtramos por la fecha de hoy en Santiago
+      const todayChile = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+      const dateToFilter = !isInvalid(fecha) ? fecha : todayChile;
       queryParams.push(dateToFilter);
       query += ` AND vp.created_at::date = $${queryParams.length}`;
     }
 
-    // Filtro por cadena (opcional)
     if (!isInvalid(cadena)) {
       queryParams.push(cadena);
       query += ` AND l.cadena = $${queryParams.length}`;
     }
 
-    query += ` ORDER BY vp.created_at DESC LIMIT 200`;
+    query += ` ORDER BY vp.created_at DESC LIMIT 150`;
 
     const result = await pool.query(query, queryParams);
-    
-    // Si no hay resultados, enviamos array vacío en vez de error
     res.json(result.rows || []);
 
   } catch (error) {
     console.error("❌ Error Crítico en getPhotoAudit:", error.message);
-    res.status(500).json({ 
-      message: "Error interno al procesar auditoría", 
-      details: error.message 
-    });
+    res.status(500).json({ message: "Error interno en auditoría" });
   }
 };
 
 /**
- * 📝 ACTUALIZA UNA EVIDENCIA
+ * 📝 3. ACTUALIZAR TIPO DE EVIDENCIA
  */
 export const updateVisitPhoto = async (req, res) => {
   const { id } = req.params;
@@ -96,23 +151,22 @@ export const updateVisitPhoto = async (req, res) => {
   const { photo_type } = req.body;
 
   try {
-    const checkQuery = `SELECT company_id FROM public.visit_photos WHERE id = $1`;
-    const check = await pool.query(checkQuery, [id]);
+    const check = await pool.query(`SELECT company_id FROM public.visit_photos WHERE id = $1`, [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: "Foto no encontrada" });
 
-    if (check.rows.length === 0) return res.status(404).json({ message: "No encontrada" });
-
-    if (role === 'ADMIN_CLIENT' && check.rows[0].company_id !== userCompanyId) {
-      return res.status(403).json({ message: "Sin permisos sobre este registro" });
+    // Verificación de permisos
+    if (role !== 'ROOT' && check.rows[0].company_id !== userCompanyId) {
+      return res.status(403).json({ message: "Acceso denegado a esta foto" });
     }
 
-    const updateQuery = `
+    const result = await pool.query(`
       UPDATE public.visit_photos 
       SET evidence_type = $1, updated_at = NOW() 
       WHERE id = $2 
       RETURNING *
-    `;
-    const result = await pool.query(updateQuery, [photo_type, id]);
-    res.json({ message: "Actualizado con éxito", data: result.rows[0] });
+    `, [photo_type, id]);
+
+    res.json({ message: "Actualizado", data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ message: "Error", error: error.message });
   }
