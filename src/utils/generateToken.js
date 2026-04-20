@@ -1,13 +1,16 @@
 import jwt from "jsonwebtoken"
 
 const generateToken = (payload) => {
-  // Aseguramos que el algoritmo sea HS256, que es el que Supabase entiende
   return jwt.sign(
-    payload,
+    {
+      ...payload,
+      aud: "authenticated",
+      role: "authenticated",
+    },
     process.env.JWT_SECRET,
-    { 
-      algorithm: 'HS256', 
-      expiresIn: "8h" 
+    {
+      algorithm: "HS256",
+      expiresIn: "8h"
     }
   )
 }
