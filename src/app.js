@@ -19,6 +19,7 @@ import questionsRoutes from "./modules/questions/questions.routes.js"
 import reportsRoutes from "./modules/reports/reports.routes.js"
 import notificationsRoutes from "./modules/notifications/notifications.routes.js" 
 import chainsRoutes from "./modules/chains/chains.routes.js"
+import turnosRoutes from "./modules/turnos/turnos.routes.js" // 🚩 AGREGADO: Importación de turnos
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -33,7 +34,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "https://cultivapp-frontend.vercel.app",
-      /\.railway\.app$/ // 👈 Permite cualquier subdominio de Railway
+      /\.railway\.app$/ 
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -56,58 +57,19 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }))
 const rootPath = path.resolve() 
 const uploadsPath = path.join(rootPath, "uploads")
 
-// Asegurar que la carpeta existe al arrancar
 if (!fs.existsSync(uploadsPath)) {
   fs.mkdirSync(uploadsPath, { recursive: true })
 }
 
-/**
- * Servimos la carpeta /uploads. 
- * Si entras a http://localhost:5000/uploads/foto.jpg, buscará en la carpeta raíz/uploads
- */
 app.use("/uploads", express.static(uploadsPath, {
-  maxAge: '1d', // Cache de un día para imágenes
+  maxAge: '1d',
   setHeaders: (res, filePath) => {
-    // Normalizamos para evitar líos entre Windows/Linux
     const normalizedPath = filePath.replace(/\\/g, "/")
-    
-    // Forzar descarga si es documento ACHS
     if (normalizedPath.includes("doc_achs") && normalizedPath.endsWith(".pdf")) {
       res.set("Content-Disposition", "attachment")
     }
   }
 }))
-
-/* =========================================
-   DEBUG: INSPECTOR DE ARCHIVOS RECURSIVO
-========================================= */
-app.get("/api/debug/files", (req, res) => {
-  const getFilesRecursively = (dir, fileList = []) => {
-    if (!fs.existsSync(dir)) return [];
-    const files = fs.readdirSync(dir);
-    files.forEach(file => {
-      const filePath = path.join(dir, file);
-      if (fs.statSync(filePath).isDirectory()) {
-        getFilesRecursively(filePath, fileList);
-      } else {
-        // Guardamos la ruta relativa para verla igual que en la DB
-        fileList.push(filePath.replace(uploadsPath, "").replace(/\\/g, "/"));
-      }
-    });
-    return fileList;
-  };
-
-  try {
-    const allFiles = getFilesRecursively(uploadsPath);
-    res.json({
-      total: allFiles.length,
-      server_path: uploadsPath,
-      files: allFiles
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 /* =========================================
    API ROUTES
@@ -123,6 +85,7 @@ app.use("/api/questions", questionsRoutes)
 app.use("/api/reports", reportsRoutes) 
 app.use("/api/notifications", notificationsRoutes)
 app.use("/api/chains", chainsRoutes)
+app.use("/api/turnos-config", turnosRoutes) // 🚩 AGREGADO: Endpoint para configuración de turnos
 
 /* =========================================
    HEALTH & ERRORS

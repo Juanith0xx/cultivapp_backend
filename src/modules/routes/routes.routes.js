@@ -5,6 +5,7 @@ import upload from "../../middlewares/upload.js";
 
 import {
   createRoute,      
+  bulkCreate,       // 🚩 IMPORTANTE: Asegúrate de que esta función exista en tu controller
   getRoutes,
   getRoutesByUser,
   deleteRoute,
@@ -16,18 +17,29 @@ import {
   getLiveMonitoring, 
   finishVisit,
   addVisitScan,
-  getAttendanceReport // 🚩 Nuevo controlador para el Dashboard
+  getAttendanceReport 
 } from "./routes.controller.js";
 
 const router = Router();
 
 /* =========================================================
-   1. RUTAS DE MONITOREO Y REPORTES (SUPERVISOR / ADMIN)
+   1. GESTIÓN ADMINISTRATIVA (ROOT / ADMIN_CLIENTE)
 ========================================================= */
 
 /**
- * 📊 REPORTE DE ASISTENCIA (Control de Jornada)
- * URL: GET /api/routes/attendance-report
+ * 🚀 CARGA MASIVA DE RUTAS DESDE EXCEL
+ * URL: POST /api/routes/bulk-create
+ * Resolvemos el error 404 del frontend
+ */
+router.post(
+  "/bulk-create", 
+  auth, 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  bulkCreate 
+);
+
+/**
+ * 📊 REPORTE DE ASISTENCIA
  */
 router.get(
   "/attendance-report", 
@@ -37,7 +49,7 @@ router.get(
 );
 
 /**
- * 📍 MONITOREO GPS EN TIEMPO REAL (Mapa en vivo)
+ * 📍 MONITOREO GPS EN TIEMPO REAL
  */
 router.get(
   "/monitoring/live",
@@ -47,7 +59,7 @@ router.get(
 );
 
 /**
- * 📋 GESTIÓN GENERAL DE RUTAS
+ * 📋 GESTIÓN INDIVIDUAL DE RUTAS
  */
 router.get(
   "/", 
@@ -67,7 +79,6 @@ router.post(
    2. OPERACIONES DEL MERCADERISTA (USUARIO)
 ========================================================= */
 
-// Mi agenda diaria
 router.get(
   "/my-tasks", 
   auth, 
@@ -75,7 +86,6 @@ router.get(
   getMyTasks
 );
 
-// Check-in con GPS (Actualiza estado a IN_PROGRESS)
 router.post(
   "/:id/check-in", 
   auth, 
@@ -83,7 +93,6 @@ router.post(
   checkIn
 );
 
-// Finalizar visita (Check-out)
 router.post(
   "/:id/finish",
   auth,
@@ -91,7 +100,6 @@ router.post(
   finishVisit
 );
 
-// Evidencia fotográfica
 router.post(
   "/:id/photo", 
   auth, 
@@ -100,7 +108,6 @@ router.post(
   saveVisitPhoto
 );
 
-// Escaneo de productos (Barcode)
 router.post(
   "/:id/scans",
   auth,
@@ -109,10 +116,9 @@ router.post(
 );
 
 /* =========================================================
-   3. GESTIÓN DINÁMICA (ADMIN / ROOT)
+   3. MANTENIMIENTO Y EDICIÓN
 ========================================================= */
 
-// Rutas por usuario específico
 router.get(
   "/user/:userId", 
   auth, 
@@ -120,7 +126,6 @@ router.get(
   getRoutesByUser
 );
 
-// Resetear visita a PENDIENTE
 router.post(
   "/:id/reset-check-in",
   auth,
@@ -128,7 +133,6 @@ router.post(
   resetCheckIn
 );
 
-// Editar una ruta
 router.put(
   "/:id", 
   auth, 
@@ -136,7 +140,6 @@ router.put(
   updateRoute
 );
 
-// Eliminar ruta
 router.delete(
   "/:id", 
   auth, 

@@ -4,7 +4,6 @@ import {
   changePassword,
   forgotPassword,
   resetPassword,
-  testEmail 
 } from "./auth.controller.js"
 
 import auth from "../../middlewares/auth.js"
@@ -26,6 +25,6 @@ router.post("/reset-password", resetPassword)
 /* ===============================
    TEST EMAIL (TEMPORAL)
 =============================== */
-router.get("/test-email", testEmail)
+/*router.get("/test-email", testEmail)*/
 
 export default router
