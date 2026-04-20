@@ -21,6 +21,7 @@ export const sendNotification = async (req, res) => {
       type: type || 'info',
       scope,
       is_read: false,
+      read_at: null, // 🚩 Inicializamos vacío
       target_user_id: scope === 'individual' ? targetId : null,
       target_local_id: scope === 'local' ? targetId : null
     };
@@ -56,7 +57,6 @@ export const sendBulkNotifications = async (req, res) => {
         type: 'info'
       }];
     } else {
-      // targetIds viene del frontend como un array de IDs de usuarios
       notifications = targetIds.map(id => ({
         tenant_id,
         sender_id,
@@ -64,6 +64,7 @@ export const sendBulkNotifications = async (req, res) => {
         message,
         scope,
         is_read: false,
+        read_at: null,
         target_user_id: scope === 'individual' ? id : null,
         target_local_id: scope === 'local' ? localId : null,
         type: 'info'
@@ -89,10 +90,8 @@ export const getMyNotifications = async (req, res) => {
     let query = supabase.from('notifications').select('*');
 
     if (role === 'ROOT') {
-      // El ROOT ve todo el historial del sistema
       query = query.order('created_at', { ascending: false });
     } else {
-      // Filtro para usuarios normales y admins de clientes
       let orFilter = `target_user_id.eq.${userId},scope.eq.global`;
       if (local_id) {
         orFilter += `,and(scope.eq.local,target_local_id.eq.${local_id})`;
@@ -112,16 +111,22 @@ export const getMyNotifications = async (req, res) => {
 };
 
 /**
- * 📤 HISTORIAL DE ENVIADOS
+ * 📤 HISTORIAL DE ENVIADOS (Aquí es donde el Supervisor ve el Check)
+ * Se agregó 'read_at' y 'is_read' en el select para la trazabilidad.
  */
 export const getSentNotifications = async (req, res) => {
   try {
     const { id, role, company_id } = req.user;
-    let query = supabase.from('notifications').select('*');
+    
+    // 🚩 Traemos también datos del destinatario para que el Supervisor sepa quién leyó
+    let query = supabase.from('notifications').select(`
+      *,
+      target_user:target_user_id (first_name, last_name, rut)
+    `);
 
     if (role === 'ROOT') {
       // Root ve todo
-    } else if (role === 'ADMIN_CLIENTE') {
+    } else if (role === 'ADMIN_CLIENTE' || role === 'SUPERVISOR') {
       query = query.eq('tenant_id', company_id);
     } else {
       query = query.eq('sender_id', id);
@@ -136,14 +141,17 @@ export const getSentNotifications = async (req, res) => {
 };
 
 /**
- * ✅ MARCAR COMO LEÍDA
+ * ✅ MARCAR COMO LEÍDA (Mejorado con Timestamp)
  */
 export const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
     const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true })
+      .update({ 
+        is_read: true, 
+        read_at: new Date().toISOString() // 🚩 Grabamos la hora de lectura
+      })
       .eq('id', id);
 
     if (error) throw error;
@@ -182,9 +190,14 @@ export const deleteNotification = async (req, res) => {
 export const markAllAsRead = async (req, res) => {
   try {
     const userId = req.user.id;
+    const now = new Date().toISOString();
+    
     const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true })
+      .update({ 
+        is_read: true,
+        read_at: now 
+      })
       .eq('target_user_id', userId)
       .eq('is_read', false);
 
