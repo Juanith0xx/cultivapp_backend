@@ -12,6 +12,9 @@ import {
   getPublicUserCredential
 } from "./users.controller.js"
 
+// 🚩 IMPORTAMOS EL NUEVO CONTROLADOR DE SUPERVISORES
+import { getSupervisorLocales, assignLocales } from "./supervisor.controller.js"
+
 import auth from "../../middlewares/auth.js"
 import roleGuard from "../../middlewares/roleGuard.js"
 
@@ -48,9 +51,6 @@ router.put(
   updateUser
 )
 
-/** * 🚩 GET USERS (ACTUALIZADA): 
- * Ahora incluimos "SUPERVISOR" para que el AlertManager pueda listar al personal.
- */
 router.get(
   "/", 
   roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
@@ -75,11 +75,29 @@ router.put(
   resetPassword
 )
 
+/* =========================================
+   🚩 GESTIÓN DE COBERTURA (SUPERVISORES)
+   ========================================= */
+
+// Obtener locales que un supervisor tiene asignados
+router.get(
+  "/:id/locales", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  getSupervisorLocales
+)
+
+// Asignar nuevos locales al supervisor
+router.post(
+  "/:id/assign-locales", 
+  roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  assignLocales
+)
+
 /* --- ESTADÍSTICAS --- */
 
 router.get(
   "/company/:companyId/stats", 
-  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), // 🚩 También añadimos aquí por si necesitas ver métricas en el Panel de Cobertura
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
   getCompanyStats
 )
 
