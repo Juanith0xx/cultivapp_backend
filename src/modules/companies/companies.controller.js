@@ -7,7 +7,6 @@ import bcrypt from "bcryptjs"
 ========================================================= */
 export const getCompanies = async (req, res) => {
   try {
-
     const result = await db.query(`
       SELECT 
         id,
@@ -20,6 +19,7 @@ export const getCompanies = async (req, res) => {
         is_active,
         created_at
       FROM companies
+      WHERE deleted_at IS NULL
       ORDER BY created_at DESC
     `)
 
@@ -36,7 +36,6 @@ export const getCompanies = async (req, res) => {
    CREAR EMPRESA + ADMIN CLIENTE
 ========================================================= */
 export const createCompanyWithAdmin = async (req, res) => {
-
   const {
     rut,
     name,
@@ -152,15 +151,12 @@ export const createCompanyWithAdmin = async (req, res) => {
 
 /* =========================================================
    TOGGLE EMPRESA (ACTIVAR / DESACTIVAR)
-   Si se desactiva → desactiva usuarios también
 ========================================================= */
 export const toggleCompany = async (req, res) => {
-
   const { id } = req.params
   const client = await db.connect()
 
   try {
-
     await client.query("BEGIN")
 
     const result = await client.query(
@@ -179,7 +175,6 @@ export const toggleCompany = async (req, res) => {
 
     const company = result.rows[0]
 
-    // 🔥 Si la empresa quedó inactiva → desactivar usuarios
     if (!company.is_active) {
       await client.query(
         `
@@ -192,7 +187,6 @@ export const toggleCompany = async (req, res) => {
     }
 
     await client.query("COMMIT")
-
     res.json(company)
 
   } catch (error) {
@@ -203,3 +197,58 @@ export const toggleCompany = async (req, res) => {
     client.release()
   }
 }
+
+/* =========================================================
+   ACTUALIZAR PLAN (LÍMITES)
+   Basado en esquema real: id, rut, name, max_supervisors, max_users, max_view
+========================================================= */
+export const updateCompanyPlan = async (req, res) => {
+  const { id } = req.params;
+  const { max_supervisors, max_users, max_view } = req.body;
+
+  // Validación de formato UUID para evitar errores de sintaxis en Postgres
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(id)) {
+    return res.status(400).json({ message: "ID de empresa no válido" });
+  }
+
+  try {
+    // 🚩 IMPORTANTE: Eliminada columna 'updated_at' que no existe en tu tabla
+    const query = `
+      UPDATE companies 
+      SET 
+        max_supervisors = $1, 
+        max_users = $2, 
+        max_view = $3
+      WHERE id = $4 AND deleted_at IS NULL
+      RETURNING id, name, max_supervisors, max_users, max_view;
+    `;
+
+    const values = [
+      parseInt(max_supervisors) || 0,
+      parseInt(max_users) || 0,
+      parseInt(max_view) || 0,
+      id
+    ];
+
+    const result = await db.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        message: "Empresa no encontrada o ha sido eliminada" 
+      });
+    }
+
+    res.json({
+      message: "Límites del plan actualizados correctamente",
+      company: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ UPDATE PLAN ERROR:", error.message);
+    res.status(500).json({ 
+      message: "Error al actualizar los límites del plan",
+      details: error.message 
+    });
+  }
+};

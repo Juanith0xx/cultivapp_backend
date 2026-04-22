@@ -1,20 +1,18 @@
 import pool from "../../database/db.js";
 
 /**
- * 📊 1. ESTADÍSTICAS PARA EL SEMÁFORO DE COBERTURA
- * Blindaje: Se agrega casting explícito a UUID y manejo de nulos para evitar Error 500.
+ * 📊 1. ESTADÍSTICAS PARA EL SEMÁFORO DE COBERTURA + LISTADO ÚNICO DE LOCALES
  */
 export const getDashboardStats = async (req, res) => {
   try {
     const { role, company_id: userCompanyId, id: currentUserId } = req.user;
     const { company_id: queryCompanyId, supervisor_id } = req.query;
 
-    // Sanitización de IDs para evitar errores de tipo en Postgres
     const target_supervisor = role === 'SUPERVISOR' ? currentUserId : (supervisor_id || null);
     const empresa_id = role === 'ROOT' ? queryCompanyId : userCompanyId;
 
     if (!empresa_id || !target_supervisor) {
-      return res.json({ no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0 });
+      return res.json({ no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0, locales_detalle: [] });
     }
 
     const todayChile = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
@@ -23,63 +21,66 @@ export const getDashboardStats = async (req, res) => {
 
     const query = `
       WITH my_portfolio AS (
-        -- Filtramos los locales usando casting explícito a UUID
-        SELECT locale_id FROM public.supervisor_locales 
-        WHERE supervisor_id = $4::uuid
+        -- Paso 1: Obtener locales únicos de la cartera
+        SELECT l.id, l.cadena, l.direccion, l.codigo_local
+        FROM public.locales l
+        INNER JOIN public.supervisor_locales sl ON l.id = sl.locale_id
+        WHERE sl.supervisor_id = $4::uuid AND l.deleted_at IS NULL
       ),
       planned_today AS (
-        -- Planificación filtrada por cartera y empresa
-        SELECT 
-          ur.id as route_id, 
-          ur.local_id,
-          ur.check_in,
-          ur.check_out
+        -- Paso 2: Ver planificación de hoy
+        SELECT ur.id as route_id, ur.local_id, ur.check_in, ur.check_out
         FROM public.user_routes ur
         WHERE ur.company_id = $1::uuid
-        AND ur.local_id IN (SELECT locale_id FROM my_portfolio)
+        AND ur.local_id IN (SELECT id FROM my_portfolio)
         AND (ur.visit_date = $3::date OR (ur.visit_date IS NULL AND ur.day_of_week = $2))
         AND ur.deleted_at IS NULL
       ),
       actual_visits AS (
-        -- Visitas del día cruzadas con la planificación
-        SELECT 
-          v.route_id, 
-          v.started_at, 
-          v.finished_at 
+        -- Paso 3: Ver visitas reales de hoy
+        SELECT v.route_id, v.started_at, v.finished_at 
         FROM public.visits v
         WHERE v.route_id IN (SELECT route_id FROM planned_today)
         AND (v.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date = $3::date
+      ),
+      stats AS (
+        -- Paso 4: Cálculos del Semáforo (Contando locales únicos para evitar duplicados)
+        SELECT 
+          COUNT(DISTINCT pt.local_id) FILTER (WHERE pt.check_in IS NULL AND av.started_at IS NULL)::int as no_atendido,
+          COUNT(DISTINCT pt.local_id) FILTER (WHERE (pt.check_in IS NOT NULL AND pt.check_out IS NULL) OR (av.started_at IS NOT NULL AND av.finished_at IS NULL))::int as atendiendo,
+          COUNT(DISTINCT pt.local_id) FILTER (WHERE pt.check_out IS NOT NULL OR av.finished_at IS NOT NULL)::int as atendido
+        FROM planned_today pt
+        LEFT JOIN actual_visits av ON pt.route_id = av.route_id
       )
       SELECT 
-        -- 🔴 No Atendido
-        COUNT(pt.route_id) FILTER (
-          WHERE pt.check_in IS NULL AND av.started_at IS NULL
-        )::int as no_atendido,
-
-        -- 🟡 Atendiendo
-        COUNT(pt.route_id) FILTER (
-          WHERE (pt.check_in IS NOT NULL AND pt.check_out IS NULL)
-          OR (av.started_at IS NOT NULL AND av.finished_at IS NULL)
-        )::int as atendiendo,
-
-        -- 🟢 Atendido
-        COUNT(pt.route_id) FILTER (
-          WHERE pt.check_out IS NOT NULL OR av.finished_at IS NOT NULL
-        )::int as atendido,
-
-        -- ⚫ Sin Mercaderista
-        (SELECT COUNT(*)::int FROM my_portfolio 
-         WHERE locale_id NOT IN (SELECT local_id FROM planned_today)) as sin_asignacion
-      FROM planned_today pt
-      LEFT JOIN actual_visits av ON pt.route_id = av.route_id;
+        s.*,
+        (SELECT COUNT(*)::int FROM my_portfolio WHERE id NOT IN (SELECT local_id FROM planned_today)) as sin_asignacion,
+        (
+          -- CORRECCIÓN: Usamos DISTINCT ON para que cada local aparezca una sola vez en el listado
+          SELECT json_agg(json_build_object(
+            'id', d.id,
+            'cadena', d.cadena,
+            'direccion', d.direccion,
+            'codigo_local', d.codigo_local
+          ))
+          FROM (
+            SELECT DISTINCT ON (mp.id) 
+              mp.id, mp.cadena, mp.direccion, mp.codigo_local
+            FROM my_portfolio mp
+            ORDER BY mp.id
+          ) d
+        ) as locales_detalle
+      FROM stats s;
     `;
 
-    // Parámetros ordenados: $1:empresa, $2:día_int, $3:fecha, $4:supervisor
     const queryParams = [empresa_id, currentDay, todayChile, target_supervisor];
-
     const result = await pool.query(query, queryParams);
     
-    res.json(result.rows[0] || { no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0 });
+    const response = result.rows[0] || { no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0, locales_detalle: [] };
+    
+    if (!response.locales_detalle) response.locales_detalle = [];
+    
+    res.json(response);
 
   } catch (error) {
     console.error("❌ Error Crítico Semáforo:", error.message);

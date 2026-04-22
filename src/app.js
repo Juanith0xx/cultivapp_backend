@@ -37,7 +37,8 @@ app.use(
       /\.railway\.app$/ 
     ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    // 🚩 MEJORA: Se agrega 'PATCH' a los métodos permitidos
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     optionsSuccessStatus: 200 
   })
@@ -76,13 +77,14 @@ app.use("/uploads", express.static(uploadsPath, {
 ========================================= */
 app.use("/api/auth", authRoutes)
 app.use("/api/companies", companiesRoutes)
+// ... resto de rutas igual
 app.use("/api/users", usersRoutes)
 app.use("/api/locales", localesRoutes)
 app.use("/api/routes", routesRoutes)
 app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
-app.use("/api/reports", reportsRoutes) // 🚩 ESTA RUTA ESTÁ CORRECTA
+app.use("/api/reports", reportsRoutes) 
 app.use("/api/notifications", notificationsRoutes)
 app.use("/api/chains", chainsRoutes)
 app.use("/api/turnos-config", turnosRoutes) 
