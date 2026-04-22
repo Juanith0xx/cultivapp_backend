@@ -1,4 +1,5 @@
 import * as userService from "../users/users.service.js";
+import db from "../../database/db.js"; // 🚩 Asegúrate de que esta importación sea correcta según tu estructura
 
 /* =========================================
    GET PUBLIC USER CREDENTIAL
@@ -93,7 +94,7 @@ export const updateUser = async (req, res) => {
 };
 
 /* =========================================
-   GET USERS (🚩 FIX ERROR 400 ROOT)
+   GET USERS
 ========================================= */
 export const getUsers = async (req, res) => {
   try {
@@ -101,19 +102,15 @@ export const getUsers = async (req, res) => {
     const { role: queryRole, company_id: queryCompany } = req.query;
 
     let users;
-
     if (loggedUser.role === "ROOT") {
-      // ✅ Si es ROOT, queryCompany puede ser null (trae todo) o un ID específico de filtro
       users = await userService.getUsers(queryRole, queryCompany || null);
     } else {
-      // 🔒 Si es ADMIN, forzamos su propia empresa
       users = await userService.getUsers(queryRole, loggedUser.company_id);
     }
 
     res.json(users);
   } catch (error) {
     console.error("❌ GET USERS ERROR:", error.message);
-    // 🚩 Si el service lanza "Falta empresa", aquí lo capturamos para no romper el dashboard
     res.status(400).json({ message: error.message });
   }
 };
@@ -176,19 +173,18 @@ export const resetPassword = async (req, res) => {
 };
 
 /* =========================================
-   GET COMPANY STATS (🚩 FIX ROOT ACCESS)
+   GET COMPANY STATS
 ========================================= */
 export const getCompanyStats = async (req, res) => {
   try {
     const { companyId } = req.params;
     const loggedUser = req.user;
 
-    // Permitir si es ROOT (acceso total) O si es ADMIN de esa misma empresa
     const isRoot = loggedUser.role === "ROOT";
     const isOwnerAdmin = loggedUser.role === "ADMIN_CLIENTE" && companyId === loggedUser.company_id;
 
     if (!isRoot && !isOwnerAdmin) {
-      return res.status(403).json({ message: "Sin permisos para ver estadísticas de esta empresa" });
+      return res.status(403).json({ message: "Sin permisos" });
     }
 
     const stats = await userService.getCompanyStats(companyId);
@@ -196,5 +192,55 @@ export const getCompanyStats = async (req, res) => {
   } catch (error) { 
     console.error("❌ STATS ERROR:", error.message);
     res.status(400).json({ message: error.message }); 
+  }
+};
+
+/* =========================================
+   NUEVA MEJORA: UPDATE USER CONTACT
+   (Consulta Directa a DB para evitar fallos de servicio)
+   ========================================= */
+export const updateUserContact = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, phone } = req.body;
+    const loggedUser = req.user;
+
+    // 1. Verificación de permisos básica
+    const targetUser = await userService.getUserById(id);
+    if (!targetUser) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    if (loggedUser.role === "ADMIN_CLIENTE" && targetUser.company_id !== loggedUser.company_id) {
+      return res.status(403).json({ message: "No tienes permisos para editar este usuario" });
+    }
+
+    // 2. Consulta Directa
+    const query = `
+      UPDATE users 
+      SET 
+        email = $1, 
+        phone = $2
+      WHERE id = $3
+      RETURNING id, first_name, email, phone;
+    `;
+
+    const result = await db.query(query, [email, phone, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Error al actualizar contacto" });
+    }
+
+    res.json({
+      message: "Datos de contacto actualizados",
+      user: result.rows[0]
+    });
+  } catch (error) {
+    console.error("❌ UPDATE CONTACT ERROR:", error.message);
+    
+    // Error de email duplicado en Postgres
+    if (error.code === '23505') {
+        return res.status(400).json({ message: "El correo ya está siendo usado por otro usuario" });
+    }
+    
+    res.status(500).json({ message: "Error interno al actualizar" });
   }
 };

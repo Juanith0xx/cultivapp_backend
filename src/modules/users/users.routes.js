@@ -9,7 +9,8 @@ import {
   deleteUser,
   getCompanyStats,
   resetPassword,
-  getPublicUserCredential
+  getPublicUserCredential,
+  updateUserContact // 👈 1. Importamos la nueva función
 } from "./users.controller.js"
 
 // 🚩 IMPORTAMOS EL NUEVO CONTROLADOR DE SUPERVISORES
@@ -49,6 +50,13 @@ router.put(
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
   userUploads, 
   updateUser
+)
+
+// 🚩 2. NUEVA RUTA: Actualizar contacto (Email/Teléfono)
+router.put(
+  "/:id/update-contact",
+  roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
+  updateUserContact
 )
 
 router.get(
