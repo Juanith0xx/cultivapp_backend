@@ -200,20 +200,17 @@ export const toggleCompany = async (req, res) => {
 
 /* =========================================================
    ACTUALIZAR PLAN (LÍMITES)
-   Basado en esquema real: id, rut, name, max_supervisors, max_users, max_view
 ========================================================= */
 export const updateCompanyPlan = async (req, res) => {
   const { id } = req.params;
   const { max_supervisors, max_users, max_view } = req.body;
 
-  // Validación de formato UUID para evitar errores de sintaxis en Postgres
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(id)) {
     return res.status(400).json({ message: "ID de empresa no válido" });
   }
 
   try {
-    // 🚩 IMPORTANTE: Eliminada columna 'updated_at' que no existe en tu tabla
     const query = `
       UPDATE companies 
       SET 
@@ -250,5 +247,60 @@ export const updateCompanyPlan = async (req, res) => {
       message: "Error al actualizar los límites del plan",
       details: error.message 
     });
+  }
+};
+
+/* =========================================================
+   ELIMINAR EMPRESA (BORRADO LÓGICO)
+   Marca deleted_at y desactiva a todos los usuarios asociados
+========================================================= */
+export const deleteCompany = async (req, res) => {
+  const { id } = req.params;
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 1. Marcar empresa como borrada y desactivarla
+    const result = await client.query(
+      `
+      UPDATE companies 
+      SET 
+        deleted_at = NOW(), 
+        is_active = false 
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING name
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error("La empresa no existe o ya ha sido eliminada");
+    }
+
+    const companyName = result.rows[0].name;
+
+    // 2. Desactivar a todos los usuarios que pertenecen a esta empresa
+    await client.query(
+      `
+      UPDATE users 
+      SET is_active = false 
+      WHERE company_id = $1
+      `,
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ 
+      message: `Empresa "${companyName}" eliminada correctamente y usuarios desactivados.` 
+    });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("DELETE COMPANY ERROR:", error.message);
+    res.status(500).json({ message: error.message });
+  } finally {
+    client.release();
   }
 };

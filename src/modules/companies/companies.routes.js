@@ -6,7 +6,8 @@ import {
   getCompanies,
   createCompanyWithAdmin,
   toggleCompany,
-  updateCompanyPlan // 👈 Importamos la nueva función
+  updateCompanyPlan,
+  deleteCompany // 👈 1. Importamos la función de borrado
 } from "./companies.controller.js"
 
 const router = Router()
@@ -49,7 +50,19 @@ router.patch(
   "/:id",
   auth,
   roleGuard("ROOT"),
-  updateCompanyPlan // 👈 Esta es la ruta que resuelve el error "Cannot PATCH"
+  updateCompanyPlan
+)
+
+/**
+ * @route   DELETE /api/companies/:id
+ * @desc    Eliminar empresa (Soft Delete)
+ * @access  Private (ROOT)
+ */
+router.delete(
+  "/:id",
+  auth,
+  roleGuard("ROOT"), // 🚩 Solo ROOT puede realizar esta acción
+  deleteCompany      // 👈 2. Registramos la ruta para eliminar
 )
 
 export default router
