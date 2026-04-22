@@ -7,7 +7,7 @@ import {
   createCompanyWithAdmin,
   toggleCompany,
   updateCompanyPlan,
-  deleteCompany // 👈 1. Importamos la función de borrado
+  deleteCompany 
 } from "./companies.controller.js"
 
 const router = Router()
@@ -23,46 +23,49 @@ router.get("/",
 
 /**
  * @route   POST /api/companies/with-admin
+ * 🚩 Mejora: Permitimos ADMIN_CLIENTE para que Cultiva Admin pueda entrar
  */
 router.post(
   "/with-admin",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   createCompanyWithAdmin
 )
 
 /**
  * @route   PATCH /api/companies/:id/toggle
+ * 🚩 Mejora: Acceso para togglear estados habilitado para el portero
  */
 router.patch(
   "/:id/toggle",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   toggleCompany
 )
 
 /**
  * @route   PATCH /api/companies/:id
  * @desc    Actualizar los límites del plan (Cuotas de usuarios)
- * @access  Private (ROOT)
+ * 🚩 Mejora: Permitimos el paso al controlador para validar ID de Cultiva
  */
 router.patch(
   "/:id",
   auth,
-  roleGuard("ROOT"),
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
   updateCompanyPlan
 )
 
 /**
  * @route   DELETE /api/companies/:id
  * @desc    Eliminar empresa (Soft Delete)
- * @access  Private (ROOT)
+ * 🔒 Nota: Mantenemos solo ROOT aquí por máxima seguridad, 
+ * o puedes añadir ADMIN_CLIENTE si quieres que Cultiva también borre.
  */
 router.delete(
   "/:id",
   auth,
-  roleGuard("ROOT"), // 🚩 Solo ROOT puede realizar esta acción
-  deleteCompany      // 👈 2. Registramos la ruta para eliminar
+  roleGuard("ROOT"), 
+  deleteCompany      
 )
 
 export default router
