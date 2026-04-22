@@ -19,7 +19,7 @@ import questionsRoutes from "./modules/questions/questions.routes.js"
 import reportsRoutes from "./modules/reports/reports.routes.js"
 import notificationsRoutes from "./modules/notifications/notifications.routes.js" 
 import chainsRoutes from "./modules/chains/chains.routes.js"
-import turnosRoutes from "./modules/turnos/turnos.routes.js" // 🚩 AGREGADO: Importación de turnos
+import turnosRoutes from "./modules/turnos/turnos.routes.js" 
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -82,10 +82,10 @@ app.use("/api/routes", routesRoutes)
 app.use("/api/regions", regionsRoutes)
 app.use("/api/comunas", comunasRoutes)
 app.use("/api/questions", questionsRoutes)
-app.use("/api/reports", reportsRoutes) 
+app.use("/api/reports", reportsRoutes) // 🚩 ESTA RUTA ESTÁ CORRECTA
 app.use("/api/notifications", notificationsRoutes)
 app.use("/api/chains", chainsRoutes)
-app.use("/api/turnos-config", turnosRoutes) // 🚩 AGREGADO: Endpoint para configuración de turnos
+app.use("/api/turnos-config", turnosRoutes) 
 
 /* =========================================
    HEALTH & ERRORS

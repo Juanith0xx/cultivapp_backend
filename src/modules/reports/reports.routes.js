@@ -1,9 +1,20 @@
 import { Router } from "express";
-import { getPhotoAudit, updateVisitPhoto } from "./reports.controller.js";
+import { 
+  getDashboardStats, 
+  getPhotoAudit, 
+  updateVisitPhoto 
+} from "./reports.controller.js";
 // 🚩 Importamos tanto el middleware de autenticación como el de autorización
 import authenticateToken, { authorizeEditor } from "../../middlewares/auth.js";
 
 const router = Router();
+
+/**
+ * 📊 RUTA: Estadísticas para el Semáforo de Cobertura
+ * Acceso: Cualquier usuario autenticado. 
+ * El controlador gestiona si filtra por supervisor_id o por empresa completa.
+ */
+router.get("/dashboard-stats", authenticateToken, getDashboardStats);
 
 /**
  * 📸 RUTA: Obtener Auditoría Fotográfica
