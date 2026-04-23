@@ -19,85 +19,106 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 }
 
 /* =========================================================
-   CARGA MASIVA (DEBUG DE LONGITUD)
+   CARGA MASIVA (EXCEL -> ORIGIN: 'TURNO')
 ========================================================= */
 
 export const bulkCreate = async (req, res) => {
   try {
-    // Aceptamos datos tanto en req.body.routes como en req.body directo
     const rawData = req.body.routes || req.body;
     const company_id = req.user.company_id;
 
-    console.log("🔍 [DEBUG] Cantidad de filas recibidas:", Array.isArray(rawData) ? rawData.length : "No es array");
-
     if (!Array.isArray(rawData) || rawData.length === 0) {
-      console.error("❌ [ERROR 400] El array llegó vacío desde el frontend.");
-      return res.status(400).json({ 
-        message: "El archivo se procesó pero no se encontraron filas válidas para cargar. Revisa que los RUTs y Códigos de Local existan en el sistema." 
-      });
+      return res.status(400).json({ message: "No se encontraron filas válidas." });
     }
 
     const processedRoutes = [];
-    let skipCount = 0;
+    const groupTracker = new Map();
 
     for (const fila of rawData) {
-      // Normalizamos el nombre del turno para el match
       const nombreTurno = fila.Tipo_de_Turno?.toString().trim().toUpperCase();
       const rol = fila.Rol?.toString().trim();
+      const userId = fila.user_id;
+      const localId = fila.local_id;
 
-      // Buscamos configuración horaria
+      // 1. Identificador de grupo para el Excel
+      const groupKey = `${userId}-${localId}-${nombreTurno}`;
+      if (nombreTurno && !groupTracker.has(groupKey)) {
+        groupTracker.set(groupKey, crypto.randomUUID());
+      }
+
+      const schedule_group_id = nombreTurno ? groupTracker.get(groupKey) : null;
+
+      // 2. Buscar configuración de hora
       const turnoRes = await db.query(
-        `SELECT entrada, salida FROM public.turnos_config 
-         WHERE company_id = $1 
-         AND UPPER(TRIM(nombre_turno)) = $2 
-         AND TRIM(categoria_rol) = $3 
-         LIMIT 1`,
+        `SELECT entrada FROM public.turnos_config 
+         WHERE company_id = $1 AND UPPER(TRIM(nombre_turno)) = $2 AND TRIM(categoria_rol) = $3 LIMIT 1`,
         [company_id, nombreTurno, rol]
       );
 
-      const config = turnoRes.rows[0];
-      const hora_entrada = config ? config.entrada : (fila.Entrada || "08:00");
+      const hora_entrada = turnoRes.rows[0]?.entrada || (fila.Entrada || "08:00");
 
-      // VITAL: Verificar que el frontend envió los IDs ya resueltos
-      if (fila.user_id && fila.local_id) {
+      if (userId && localId) {
         processedRoutes.push({
           company_id,
-          user_id: fila.user_id,
-          local_id: fila.local_id,
+          user_id: userId,
+          local_id: localId,
           visit_date: fila.Fecha, 
           start_time: hora_entrada,
-          is_recurring: false
+          schedule_group_id,
+          is_recurring: !!nombreTurno,
+          origin: nombreTurno ? 'TURNO' : 'INDIVIDUAL' // 🚩 MARCA DE ORIGEN
         });
-      } else {
-        skipCount++;
       }
     }
 
-    if (processedRoutes.length === 0) {
-      return res.status(200).json({ 
-        success: false, 
-        message: `Filas procesadas: ${rawData.length}. Filas válidas: 0. Verifica que los RUTs y Códigos de Local del Excel coincidan con los del sistema.`,
-        count: 0,
-        skipped: skipCount
-      });
-    }
-
     const result = await routeService.bulkCreateRoutes(processedRoutes);
-    
-    res.status(201).json({ 
-      success: true, 
-      message: `Carga exitosa. Se agendaron ${result.length} visitas.`,
-      count: result.length
-    });
+    res.status(201).json({ success: true, count: result.length });
 
   } catch (error) {
-    console.error("❌ [BULK FATAL ERROR]:", error.message);
-    res.status(500).json({ message: "Error interno: " + error.message });
+    console.error("❌ [BULK ERROR]:", error.message);
+    res.status(500).json({ message: "Error interno" });
   }
 };
 
 /* =========================================================
-   RESTO DE MÉTODOS (OPERACIÓN Y GESTIÓN)
+   CREACIÓN MANUAL (MODAL -> TURNO O INDIVIDUAL)
+========================================================= */
+
+export const createRoute = async (req, res) => {
+  try {
+    const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
+    const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
+    
+    let tasks;
+    
+    if (is_recurring && selectedDays?.length > 0) {
+      // 🚩 Caso: Se está creando un turno manual desde el modal
+      const groupId = crypto.randomUUID();
+      tasks = selectedDays.map(day => ({ 
+        company_id, user_id, local_id, start_time, 
+        day_of_week: parseInt(day), 
+        schedule_group_id: groupId, 
+        is_recurring: true,
+        origin: 'TURNO' 
+      }));
+    } else {
+      // 🚩 Caso: Visita única (Manual Individual)
+      tasks = [{ 
+        company_id, user_id, local_id, start_time, visit_date, 
+        is_recurring: false,
+        origin: 'INDIVIDUAL' 
+      }];
+    }
+
+    const result = await routeService.bulkCreateRoutes(tasks);
+    res.status(201).json({ data: result });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+/* =========================================================
+   OPERACIONES Y MONITOREO
 ========================================================= */
 
 export const checkIn = async (req, res) => {
@@ -147,18 +168,13 @@ export const finishVisit = async (req, res) => {
   }
 };
 
-export const getMyTasks = async (req, res) => {
-  try {
-    const date = req.query.date || new Date().toISOString().split('T')[0];
-    const tasks = await routeService.getRoutesByUserAndDate(
-      req.user.role === 'ROOT' ? null : req.user.company_id, 
-      (req.user.role === 'ROOT' && req.query.userId) ? req.query.userId : req.user.id, 
-      date
-    );
-    res.json(tasks || []);
-  } catch (error) {
-    res.status(400).json({ message: "Error al obtener agenda" });
-  }
+export const getMyTasks = (req, res) => {
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  routeService.getRoutesByUserAndDate(
+    req.user.role === 'ROOT' ? null : req.user.company_id, 
+    (req.user.role === 'ROOT' && req.query.userId) ? req.query.userId : req.user.id, 
+    date
+  ).then(tasks => res.json(tasks || [])).catch(err => res.status(400).json({ message: err.message }));
 };
 
 export const getAttendanceReport = async (req, res) => {
@@ -187,20 +203,6 @@ export const getAttendanceReport = async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ message: "Error al generar reporte" });
-  }
-};
-
-export const createRoute = async (req, res) => {
-  try {
-    const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
-    const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
-    let tasks = is_recurring && selectedDays?.length > 0 
-      ? selectedDays.map(day => ({ company_id, user_id, local_id, start_time, day_of_week: parseInt(day), schedule_group_id: crypto.randomUUID(), is_recurring: true }))
-      : [{ company_id, user_id, local_id, start_time, visit_date, is_recurring: false }];
-    const result = await routeService.bulkCreateRoutes(tasks);
-    res.status(201).json({ data: result });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
   }
 };
 
