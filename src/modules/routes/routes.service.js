@@ -10,6 +10,7 @@ export const getRoutesByCompany = async (company_id) => {
       SELECT 
         ur.*, 
         u.first_name, u.last_name, 
+        u.tipo_contrato as user_role,
         l.id as local_id, l.cadena, l.direccion, l.codigo_local,
         c.name as comuna_name,
         -- 🕵️ Solo buscamos nombre si el origen es TURNO. 
