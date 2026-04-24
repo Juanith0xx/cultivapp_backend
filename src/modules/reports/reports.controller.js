@@ -1,7 +1,108 @@
 import pool from "../../database/db.js";
+import path from "path";
+import fs from "fs";
 
 /**
- * 📊 1. ESTADÍSTICAS PARA EL SEMÁFORO DE COBERTURA + LISTADO ÚNICO DE LOCALES
+ * 🛠️ UTILIDAD: Slugify para carpetas y nombres de archivos
+ */
+const slugify = (text) => {
+  return text
+    ?.toString()
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") 
+    .replace(/\s+/g, "_")           
+    .replace(/[^a-z0-9_]/g, "")     
+    || "desconocido";
+};
+
+/**
+ * 🚀 1. GUARDADO FÍSICO Y LÓGICO DE FOTOS (ESTRUCTURA DINÁMICA)
+ */
+export const uploadVisitPhotoAction = async (req, res) => {
+  try {
+    const { visit_id } = req.params; 
+    const { photo_type } = req.body; 
+    const file = req.file;
+
+    if (!file) return res.status(400).json({ message: "No se recibió archivo de imagen" });
+
+    // 🚩 PASO 1: OBTENER DATA REAL DE POSTGRES
+    const infoQuery = await pool.query(`
+      SELECT 
+        c.name as empresa_nombre,
+        u.first_name,
+        u.last_name,
+        ur.company_id
+      FROM public.user_routes ur
+      INNER JOIN public.companies c ON ur.company_id = c.id
+      INNER JOIN public.users u ON ur.user_id = u.id
+      WHERE ur.id = $1
+    `, [visit_id]);
+
+    if (infoQuery.rows.length === 0) {
+      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      return res.status(404).json({ message: "La ruta asociada no existe" });
+    }
+
+    const { empresa_nombre, first_name, last_name, company_id } = infoQuery.rows[0];
+    const nombreCompleto = `${first_name} ${last_name}`;
+
+    // 🚩 PASO 2: DEFINIR ESTRUCTURA DE CARPETAS
+    const folderEmpresa = slugify(empresa_nombre);
+    const folderUsuario = slugify(nombreCompleto);
+    
+    const mapeoSubcarpetas = {
+      'Fachada': 'foto_local',
+      'Góndola Inicio': 'foto_gondola',
+      'Góndola Final': 'foto_term_producto',
+      'Observaciones': 'foto_observaciones'
+    };
+    const subFolder = mapeoSubcarpetas[photo_type] || 'otros';
+
+    const relativeDirPath = path.join(folderEmpresa, folderUsuario, 'evidencias', subFolder);
+    const absoluteDirPath = path.join(process.cwd(), 'uploads', relativeDirPath);
+
+    if (!fs.existsSync(absoluteDirPath)) {
+      fs.mkdirSync(absoluteDirPath, { recursive: true });
+    }
+
+    // 🚩 PASO 4: NOMBRE FINAL DEL ARCHIVO CON FECHA Y HORA (ACTUALIZADO)
+    const ahora = new Date();
+    // Formato: 2026-04-23
+    const fecha = ahora.toISOString().split('T')[0];
+    // Formato: 22h45m10s
+    const hora = `${ahora.getHours()}h${ahora.getMinutes()}m${ahora.getSeconds()}s`;
+    const extension = path.extname(file.originalname).toLowerCase();
+    
+    // Generamos un nombre tipo: Fachada_2026-04-23_22h45m10s.jpg
+    const fileName = `${slugify(photo_type || 'evidencia')}_${fecha}_${hora}${extension}`;
+    const finalDestination = path.join(absoluteDirPath, fileName);
+
+    // 🚩 PASO 5: MOVER ARCHIVO
+    fs.renameSync(file.path, finalDestination);
+
+    // 🚩 PASO 6: URL PARA BASE DE DATOS
+    const dbUrl = path.join(relativeDirPath, fileName).replace(/\\/g, "/");
+
+    const result = await pool.query(
+      `INSERT INTO public.visit_photos (visit_id, company_id, image_url, evidence_type, created_at) 
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING *`,
+      [visit_id, company_id, dbUrl, photo_type]
+    );
+
+    res.status(201).json({ success: true, url: dbUrl, data: result.rows[0] });
+
+  } catch (error) {
+    console.error("❌ ERROR CONTROLADOR (Upload):", error.message);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ message: "Error interno al procesar imagen" });
+  }
+};
+
+/**
+ * 📊 2. ESTADÍSTICAS PARA EL SEMÁFORO DE COBERTURA
  */
 export const getDashboardStats = async (req, res) => {
   try {
@@ -21,14 +122,12 @@ export const getDashboardStats = async (req, res) => {
 
     const query = `
       WITH my_portfolio AS (
-        -- Paso 1: Obtener locales únicos de la cartera
         SELECT l.id, l.cadena, l.direccion, l.codigo_local
         FROM public.locales l
         INNER JOIN public.supervisor_locales sl ON l.id = sl.locale_id
         WHERE sl.supervisor_id = $4::uuid AND l.deleted_at IS NULL
       ),
       planned_today AS (
-        -- Paso 2: Ver planificación de hoy
         SELECT ur.id as route_id, ur.local_id, ur.check_in, ur.check_out
         FROM public.user_routes ur
         WHERE ur.company_id = $1::uuid
@@ -37,14 +136,12 @@ export const getDashboardStats = async (req, res) => {
         AND ur.deleted_at IS NULL
       ),
       actual_visits AS (
-        -- Paso 3: Ver visitas reales de hoy
         SELECT v.route_id, v.started_at, v.finished_at 
         FROM public.visits v
         WHERE v.route_id IN (SELECT route_id FROM planned_today)
         AND (v.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date = $3::date
       ),
       stats AS (
-        -- Paso 4: Cálculos del Semáforo (Contando locales únicos para evitar duplicados)
         SELECT 
           COUNT(DISTINCT pt.local_id) FILTER (WHERE pt.check_in IS NULL AND av.started_at IS NULL)::int as no_atendido,
           COUNT(DISTINCT pt.local_id) FILTER (WHERE (pt.check_in IS NOT NULL AND pt.check_out IS NULL) OR (av.started_at IS NOT NULL AND av.finished_at IS NULL))::int as atendiendo,
@@ -56,7 +153,6 @@ export const getDashboardStats = async (req, res) => {
         s.*,
         (SELECT COUNT(*)::int FROM my_portfolio WHERE id NOT IN (SELECT local_id FROM planned_today)) as sin_asignacion,
         (
-          -- CORRECCIÓN: Usamos DISTINCT ON para que cada local aparezca una sola vez en el listado
           SELECT json_agg(json_build_object(
             'id', d.id,
             'cadena', d.cadena,
@@ -73,23 +169,19 @@ export const getDashboardStats = async (req, res) => {
       FROM stats s;
     `;
 
-    const queryParams = [empresa_id, currentDay, todayChile, target_supervisor];
-    const result = await pool.query(query, queryParams);
-    
+    const result = await pool.query(query, [empresa_id, currentDay, todayChile, target_supervisor]);
     const response = result.rows[0] || { no_atendido: 0, atendiendo: 0, atendido: 0, sin_asignacion: 0, locales_detalle: [] };
-    
-    if (!response.locales_detalle) response.locales_detalle = [];
     
     res.json(response);
 
   } catch (error) {
-    console.error("❌ Error Crítico Semáforo:", error.message);
-    res.status(500).json({ message: "Error al calcular semáforo", details: error.message });
+    console.error("❌ ERROR CONTROLADOR (Stats):", error.message);
+    res.status(500).json({ message: "Error al calcular semáforo" });
   }
 };
 
 /**
- * 📸 2. AUDITORÍA FOTOGRÁFICA
+ * 📸 3. AUDITORÍA FOTOGRÁFICA
  */
 export const getPhotoAudit = async (req, res) => {
   try {
@@ -117,10 +209,9 @@ export const getPhotoAudit = async (req, res) => {
         l.codigo_local AS local_codigo,
         c.name AS empresa_nombre
       FROM public.visit_photos vp
-      INNER JOIN public.visits v ON vp.visit_id = v.id
-      INNER JOIN public.user_routes r ON v.route_id = r.id
-      INNER JOIN public.users u ON v.user_id = u.id
-      INNER JOIN public.locales l ON r.local_id = l.id
+      INNER JOIN public.user_routes ur ON vp.visit_id = ur.id
+      INNER JOIN public.users u ON ur.user_id = u.id
+      INNER JOIN public.locales l ON ur.local_id = l.id
       INNER JOIN public.companies c ON vp.company_id = c.id
       WHERE vp.company_id = $1
     `;
@@ -130,19 +221,11 @@ export const getPhotoAudit = async (req, res) => {
 
     if (cleanSearch !== "") {
       queryParams.push(`%${cleanSearch}%`);
-      const pIdx = queryParams.length;
-      query += ` AND (
-        u.first_name ILIKE $${pIdx} OR 
-        u.last_name ILIKE $${pIdx} OR 
-        u.rut ILIKE $${pIdx} OR
-        l.direccion ILIKE $${pIdx} OR
-        l.codigo_local ILIKE $${pIdx}
-      )`;
+      query += ` AND (u.first_name ILIKE $2 OR u.last_name ILIKE $2 OR u.rut ILIKE $2 OR l.direccion ILIKE $2 OR l.codigo_local ILIKE $2)`;
     } else {
       const todayChile = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
-      const dateToFilter = !isInvalid(fecha) ? fecha : todayChile;
-      queryParams.push(dateToFilter);
-      query += ` AND vp.created_at::date = $${queryParams.length}`;
+      queryParams.push(!isInvalid(fecha) ? fecha : todayChile);
+      query += ` AND vp.created_at::date = $2`;
     }
 
     if (!isInvalid(cadena)) {
@@ -156,13 +239,13 @@ export const getPhotoAudit = async (req, res) => {
     res.json(result.rows || []);
 
   } catch (error) {
-    console.error("❌ Error en getPhotoAudit:", error.message);
+    console.error("❌ ERROR CONTROLADOR (Audit):", error.message);
     res.status(500).json({ message: "Error interno en auditoría" });
   }
 };
 
 /**
- * 📝 3. ACTUALIZAR TIPO DE EVIDENCIA
+ * 📝 4. ACTUALIZAR TIPO DE EVIDENCIA
  */
 export const updateVisitPhoto = async (req, res) => {
   const { id } = req.params;
@@ -186,6 +269,7 @@ export const updateVisitPhoto = async (req, res) => {
 
     res.json({ message: "Actualizado", data: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: "Error", error: error.message });
+    console.error("❌ ERROR CONTROLADOR (Update):", error.message);
+    res.status(500).json({ message: "Error al actualizar evidencia" });
   }
 };

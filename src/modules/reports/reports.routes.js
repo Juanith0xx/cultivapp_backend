@@ -2,32 +2,28 @@ import { Router } from "express";
 import { 
   getDashboardStats, 
   getPhotoAudit, 
-  updateVisitPhoto 
+  updateVisitPhoto,
+  uploadVisitPhotoAction 
 } from "./reports.controller.js";
-// 🚩 Importamos tanto el middleware de autenticación como el de autorización
 import authenticateToken, { authorizeEditor } from "../../middlewares/auth.js";
+import upload from "../../middlewares/upload.js"; 
 
 const router = Router();
 
-/**
- * 📊 RUTA: Estadísticas para el Semáforo de Cobertura
- * Acceso: Cualquier usuario autenticado. 
- * El controlador gestiona si filtra por supervisor_id o por empresa completa.
- */
+// 📊 Rutas existentes
 router.get("/dashboard-stats", authenticateToken, getDashboardStats);
-
-/**
- * 📸 RUTA: Obtener Auditoría Fotográfica
- * Acceso: Cualquier usuario autenticado (el controlador filtra por empresa internamente)
- */
 router.get("/photos", authenticateToken, getPhotoAudit);
+router.put("/photos/:id", authenticateToken, authorizeEditor, updateVisitPhoto);
 
 /**
- * 📝 RUTA: Modificar Datos de una Visita/Foto
- * Acceso: Restringido a ROOT y ADMIN_CLIENT
- * Se usa 'authenticateToken' primero para identificar al usuario
- * y luego 'authorizeEditor' para validar sus permisos de edición.
+ * 🚀 SUBIDA DE FOTOS (CORREGIDA)
+ * URL Final: POST /api/reports/:visit_id/photo
  */
-router.put("/photos/:id", authenticateToken, authorizeEditor, updateVisitPhoto);
+router.post(
+  "/:visit_id/photo", // 🚩 QUITAMOS "/reports" de aquí
+  authenticateToken, 
+  upload.single("foto"), 
+  uploadVisitPhotoAction
+);
 
 export default router;
