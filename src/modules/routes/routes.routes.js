@@ -35,6 +35,7 @@ router.post(
   "/bulk-create", 
   auth, 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
+  upload.none(),
   bulkCreate 
 );
 

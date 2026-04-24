@@ -14,7 +14,6 @@ export const getRoutesByCompany = async (company_id) => {
         l.id as local_id, l.cadena, l.direccion, l.codigo_local,
         c.name as comuna_name,
         -- 🕵️ Solo buscamos nombre si el origen es TURNO. 
-        -- Si es INDIVIDUAL, devolvemos NULL para que el frontend muestre "Manual"
         CASE 
           WHEN ur.origin = 'TURNO' THEN (
             SELECT nombre_turno 
@@ -44,7 +43,7 @@ export const getRoutesByCompany = async (company_id) => {
 
 /* =========================================================
    CREAR RUTAS (BULK)
-   🚩 MEJORA: Persistencia del campo 'origin'
+   🚩 MEJORA: Prioridad a day_of_week y blindaje de fechas
 ========================================================= */
 export const bulkCreateRoutes = async (tasks) => {
   const client = await db.connect();
@@ -57,17 +56,30 @@ export const bulkCreateRoutes = async (tasks) => {
       const { 
         company_id, user_id, local_id, visit_date, start_time, 
         order_sequence, warehouse_id, is_recurring, selectedDays, 
-        schedule_group_id, day_of_week, origin // 🚩 Recibimos origin desde el controller
+        schedule_group_id, day_of_week, origin 
       } = task;
 
-      const calculatedDay = visit_date ? new Date(visit_date + "T12:00:00").getDay() : day_of_week;
+      // 🚩 MEJORA CRÍTICA: Priorizamos el day_of_week si ya viene calculado (SaaS Bulk).
+      // Solo calculamos vía fecha si no hay day_of_week explícito.
+      let calculatedDay = (day_of_week !== undefined && day_of_week !== null) 
+        ? day_of_week 
+        : null;
 
+      if (visit_date && (calculatedDay === null)) {
+        const d = new Date(visit_date + "T12:00:00");
+        calculatedDay = isNaN(d.getTime()) ? null : d.getDay();
+      }
+
+      // 🚩 MEJORA: Determinamos qué días insertar basándonos en la recurrencia
       const daysToInsert = (is_recurring && Array.isArray(selectedDays)) 
         ? selectedDays 
-        : [calculatedDay !== undefined ? calculatedDay : null];
+        : [calculatedDay];
 
       for (const day of daysToInsert) {
-        const cleanDay = day !== null ? parseInt(day, 10) : null;
+        // Evitamos insertar si no hay un día de la semana válido definido
+        if (day === null || day === undefined) continue;
+
+        const cleanDay = parseInt(day, 10);
         const cleanOrder = parseInt(order_sequence, 10) || 0;
 
         const query = `
@@ -80,7 +92,7 @@ export const bulkCreateRoutes = async (tasks) => {
           ON CONFLICT (user_id, local_id, visit_date, day_of_week) 
           DO UPDATE SET 
             start_time = EXCLUDED.start_time, 
-            origin = EXCLUDED.origin, -- 🚩 Actualizamos el origen en caso de conflicto
+            origin = EXCLUDED.origin,
             schedule_group_id = COALESCE(EXCLUDED.schedule_group_id, public.user_routes.schedule_group_id),
             updated_at = NOW()
           RETURNING *;
@@ -88,10 +100,10 @@ export const bulkCreateRoutes = async (tasks) => {
         
         const result = await client.query(query, [
           company_id, user_id, local_id, 
-          is_recurring ? null : visit_date, 
+          is_recurring ? null : (visit_date || null), 
           start_time, cleanOrder, warehouse_id || null,
           cleanDay, schedule_group_id || null, is_recurring || false,
-          origin || 'INDIVIDUAL' // 🚩 Valor por defecto si no viene
+          origin || 'INDIVIDUAL'
         ]);
         
         if (result.rows.length > 0) results.push(result.rows[0]);
@@ -118,7 +130,7 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
       SELECT 
         ur.id, ur.visit_date, ur.start_time, ur.status, ur.order_sequence, 
         ur.day_of_week, ur.is_recurring, ur.lat_in, ur.lng_in, ur.check_in,
-        ur.origin, -- 🚩 Añadido para lógica de cliente
+        ur.origin,
         l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
         c.name as comuna_name,
         u.first_name, u.last_name
