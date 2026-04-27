@@ -13,7 +13,6 @@ export const getRoutesByCompany = async (company_id) => {
         u.tipo_contrato as user_role,
         l.id as local_id, l.cadena, l.direccion, l.codigo_local,
         c.name as comuna_name,
-        -- 🕵️ Solo buscamos nombre si el origen es TURNO. 
         CASE 
           WHEN ur.origin = 'TURNO' THEN (
             SELECT nombre_turno 
@@ -44,6 +43,7 @@ export const getRoutesByCompany = async (company_id) => {
 /* =========================================================
    CREAR RUTAS (BULK)
    🚩 MEJORA: Prioridad a day_of_week y blindaje de fechas
+   🚀 NUEVO: Notificaciones en tiempo real SIN duplicados
 ========================================================= */
 export const bulkCreateRoutes = async (tasks) => {
   const client = await db.connect();
@@ -59,8 +59,6 @@ export const bulkCreateRoutes = async (tasks) => {
         schedule_group_id, day_of_week, origin 
       } = task;
 
-      // 🚩 MEJORA CRÍTICA: Priorizamos el day_of_week si ya viene calculado (SaaS Bulk).
-      // Solo calculamos vía fecha si no hay day_of_week explícito.
       let calculatedDay = (day_of_week !== undefined && day_of_week !== null) 
         ? day_of_week 
         : null;
@@ -70,13 +68,11 @@ export const bulkCreateRoutes = async (tasks) => {
         calculatedDay = isNaN(d.getTime()) ? null : d.getDay();
       }
 
-      // 🚩 MEJORA: Determinamos qué días insertar basándonos en la recurrencia
       const daysToInsert = (is_recurring && Array.isArray(selectedDays)) 
         ? selectedDays 
         : [calculatedDay];
 
       for (const day of daysToInsert) {
-        // Evitamos insertar si no hay un día de la semana válido definido
         if (day === null || day === undefined) continue;
 
         const cleanDay = parseInt(day, 10);
@@ -110,8 +106,66 @@ export const bulkCreateRoutes = async (tasks) => {
       }
     }
 
+    /* =========================================================
+       NOTIFICACIONES TIEMPO REAL SIN DUPLICADOS
+       ✅ FIX 1: Solo usuarios con ruta en el local HOY
+       ✅ FIX 2: ON CONFLICT DO NOTHING para evitar dobles inserts
+    ========================================================= */
+    if (results.length > 0) {
+      const affectedLocalIds = [...new Set(results.map(r => r.local_id))];
+
+      // ✅ FIX: Filtrar por fecha actual para no notificar usuarios históricos
+      const usersToNotifyRes = await client.query(`
+        SELECT DISTINCT ur.user_id
+        FROM public.user_routes ur
+        WHERE ur.local_id = ANY($1)
+          AND ur.company_id = $2
+          AND ur.deleted_at IS NULL
+          AND (
+            (ur.is_recurring = false AND ur.visit_date::date = CURRENT_DATE)
+            OR
+            (ur.is_recurring = true AND ur.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)::integer)
+          )
+      `, [affectedLocalIds, tasks[0].company_id]);
+
+      const uniqueUsers = [...new Set(usersToNotifyRes.rows.map(r => r.user_id))];
+
+      for (const notifyUserId of uniqueUsers) {
+        const refRoute =
+          results.find(r => r.user_id === notifyUserId) || results[0];
+
+        // ✅ FIX: ON CONFLICT DO NOTHING evita duplicados si se llama más de una vez
+        // IMPORTANTE: Requiere constraint única en la tabla:
+        // ALTER TABLE public.notifications
+        //   ADD CONSTRAINT uq_notif_user_type_related
+        //   UNIQUE (user_id, type, related_id);
+        await client.query(`
+          INSERT INTO public.notifications (
+            user_id,
+            company_id,
+            title,
+            message,
+            type,
+            related_id,
+            is_read,
+            created_at
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,false,NOW())
+          ON CONFLICT (user_id, type, related_id) DO NOTHING
+        `, [
+          notifyUserId,
+          tasks[0].company_id,
+          'Nueva Planificación',
+          'Se han actualizado las rutas en locales donde tienes asignación.',
+          'ROUTE_ASSIGNED',
+          refRoute.id
+        ]);
+      }
+    }
+
     await client.query('COMMIT');
     return results;
+
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("❌ Error en bulkCreateRoutes Service:", error.message);
@@ -179,22 +233,34 @@ export const updateRoute = async (id, data) => {
   
   if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
   
-  const { schedule_group_id: groupId, is_recurring: isRec, origin } = routeInfo.rows[0];
+  const { schedule_group_id: groupId, is_recurring: isRec } = routeInfo.rows[0];
 
   if (groupId && isRec) {
-    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [groupId, company_id]);
+    await db.query(
+      `DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
+      [groupId, company_id]
+    );
     
     const tasks = [{
-      company_id, user_id, local_id, visit_date: null, start_time,
-      selectedDays, schedule_group_id: groupId, is_recurring: true, origin: 'TURNO'
+      company_id,
+      user_id,
+      local_id,
+      visit_date: null,
+      start_time,
+      selectedDays,
+      schedule_group_id: groupId,
+      is_recurring: true,
+      origin: 'TURNO'
     }];
     
     const updatedRows = await bulkCreateRoutes(tasks);
     return updatedRows[0];
   } else {
     const result = await db.query(
-      `UPDATE public.user_routes SET user_id = $1, local_id = $2, start_time = $3, visit_date = $4, updated_at = NOW()
-       WHERE id = $5 AND ($6::uuid IS NULL OR company_id = $6) RETURNING *`,
+      `UPDATE public.user_routes 
+       SET user_id = $1, local_id = $2, start_time = $3, visit_date = $4, updated_at = NOW()
+       WHERE id = $5 AND ($6::uuid IS NULL OR company_id = $6)
+       RETURNING *`,
       [user_id, local_id, start_time, visit_date || null, id, company_id]
     );
     return result.rows[0];
@@ -202,14 +268,31 @@ export const updateRoute = async (id, data) => {
 };
 
 export const deleteRoute = async (company_id, route_id) => {
-  const routeInfo = await db.query(`SELECT schedule_group_id FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [route_id, company_id]);
+  const routeInfo = await db.query(
+    `SELECT schedule_group_id 
+     FROM public.user_routes 
+     WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
+    [route_id, company_id]
+  );
+
   if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
+
   const groupId = routeInfo.rows[0]?.schedule_group_id;
+
   if (groupId) {
-    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [groupId, company_id]);
+    await db.query(
+      `DELETE FROM public.user_routes 
+       WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
+      [groupId, company_id]
+    );
   } else {
-    await db.query(`DELETE FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [route_id, company_id]);
+    await db.query(
+      `DELETE FROM public.user_routes 
+       WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
+      [route_id, company_id]
+    );
   }
+
   return { message: "Planificación eliminada" };
 };
 
@@ -223,7 +306,9 @@ export const resetRouteStatus = async (id, company_id) => {
       RETURNING *;
     `;
     const { rows } = await db.query(query, [id, company_id]);
+
     await db.query(`DELETE FROM public.visits WHERE route_id = $1`, [id]);
+
     return rows[0];
   } catch (error) {
     throw error;
