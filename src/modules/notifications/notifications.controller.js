@@ -23,49 +23,77 @@ export const sendNotification = async (req, res) => {
       is_read: false,
       read_at: null,
       target_user_id: scope === 'individual' ? targetId : null,
-      target_local_id: scope === 'local' ? targetId : null
+      target_local_id: scope === 'local' ? targetId : null,
     };
 
-    const { data, error } = await supabase.from('notifications').insert([notificationData]).select();
+    const { data, error } = await supabase
+      .from('notifications')
+      .insert([notificationData])
+      .select();
+
     if (error) throw error;
 
     res.status(201).json({ success: true, data: data[0] });
   } catch (error) {
+    console.error("❌ sendNotification Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
 /**
  * 🔥 ENVIAR NOTIFICACIONES MASIVAS (Bulk)
- * MEJORADO: Cruce automático con planificación para Punto de Venta
  */
 export const sendBulkNotifications = async (req, res) => {
   try {
+    console.log("📦 [send-bulk] body recibido:", JSON.stringify(req.body, null, 2));
+
     const { title, message, scope, targetIds, companyId, localId, type } = req.body;
     const sender_id = req.user.id;
     const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
+
+    if (!tenant_id) {
+      return res.status(400).json({ success: false, message: 'Falta ID de empresa' });
+    }
+
+    // ✅ Normalizar targetIds: acepta string, array, o undefined
+    const normalizedTargetIds = targetIds
+      ? (Array.isArray(targetIds) ? targetIds : [targetIds])
+      : [];
 
     let notifications = [];
 
     // --- CASO 1: EMISIÓN GLOBAL (EMPRESA) ---
     if (scope === 'TODOS') {
-      // Buscamos todos los usuarios activos de la empresa
-      const { data: users } = await supabase
+      const { data: users, error: usersError } = await supabase
         .from('users')
         .select('id')
         .eq('company_id', tenant_id)
         .is('deleted_at', null);
 
-      notifications = users.map(u => ({
-        tenant_id, sender_id, title, message, scope: 'global',
-        is_read: false, type: type || 'info', target_user_id: u.id
-      }));
-    } 
+      if (usersError) throw usersError;
+      if (!users || users.length === 0) {
+        return res.status(404).json({ success: false, message: 'No hay usuarios en esta empresa' });
+      }
 
-    // --- CASO 2: EMISIÓN POR PUNTO DE VENTA (DINÁMICO) ---
+      notifications = users.map(u => ({
+        tenant_id,
+        sender_id,
+        title,
+        message,
+        scope: 'global',
+        is_read: false,
+        type: type || 'info',
+        target_user_id: u.id,
+      }));
+    }
+
+    // --- CASO 2: EMISIÓN POR PUNTO DE VENTA ---
     else if (scope === 'local') {
-      // 🚩 CRUCE DE DATOS: Buscamos quiénes están en el local HOY
-      const today = new Date().getDay(); // 0 (Dom) a 6 (Sab)
+      if (!localId) {
+        return res.status(400).json({ success: false, message: 'Falta el ID del local' });
+      }
+
+      const today = new Date().getDay();
       const todayIso = new Date().toISOString().split('T')[0];
 
       const { data: routes, error: routeError } = await supabase
@@ -77,45 +105,72 @@ export const sendBulkNotifications = async (req, res) => {
 
       if (routeError) throw routeError;
 
-      // Obtenemos IDs únicos de los mercaderistas presentes
-      const uniqueUserIds = [...new Set(routes.map(r => r.user_id))];
+      const uniqueUserIds = [...new Set((routes || []).map(r => r.user_id))];
 
       if (uniqueUserIds.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'No hay mercaderistas planificados en este local para hoy.' 
+        return res.status(404).json({
+          success: false,
+          message: 'No hay mercaderistas planificados en este local para hoy.'
         });
       }
 
       notifications = uniqueUserIds.map(uid => ({
-        tenant_id, sender_id, title, message, scope: 'local',
-        is_read: false, type: type || 'info', 
-        target_user_id: uid, 
-        target_local_id: localId
+        tenant_id,
+        sender_id,
+        title,
+        message,
+        scope: 'local',
+        is_read: false,
+        type: type || 'info',
+        target_user_id: uid,
+        target_local_id: localId,
       }));
     }
 
     // --- CASO 3: SELECCIÓN INDIVIDUAL ---
     else if (scope === 'individual') {
-      notifications = targetIds.map(id => ({
-        tenant_id, sender_id, title, message, scope: 'individual',
-        is_read: false, target_user_id: id, type: type || 'info'
+      if (normalizedTargetIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'No se especificaron destinatarios' });
+      }
+
+      notifications = normalizedTargetIds.map(id => ({
+        tenant_id,
+        sender_id,
+        title,
+        message,
+        scope: 'individual',
+        is_read: false,
+        type: type || 'info',
+        target_user_id: id,
       }));
+    }
+
+    // --- CASO 4: ZONA (pendiente de implementar filtro por zona) ---
+    else if (scope === 'ZONA') {
+      return res.status(400).json({ success: false, message: 'Envío por zona aún no implementado' });
+    }
+
+    else {
+      return res.status(400).json({ success: false, message: `Scope inválido: ${scope}` });
     }
 
     if (notifications.length === 0) {
       return res.status(400).json({ success: false, message: 'No se generaron destinatarios' });
     }
 
-    const { error } = await supabase.from('notifications').insert(notifications);
+    // ✅ ignoreDuplicates evita 500 por constraint uq_notif_user_type_related
+    const { error } = await supabase
+      .from('notifications')
+      .insert(notifications, { ignoreDuplicates: true });
+
     if (error) throw error;
 
-    res.status(201).json({ 
-      success: true, 
-      message: `Instrucción enviada a ${notifications.length} mercaderistas.` 
+    res.status(201).json({
+      success: true,
+      message: `Instrucción enviada a ${notifications.length} destinatarios.`
     });
   } catch (error) {
-    console.error("Bulk Error:", error.message);
+    console.error("❌ sendBulkNotifications Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -132,7 +187,6 @@ export const getMyNotifications = async (req, res) => {
     if (role === 'ROOT') {
       query = query.order('created_at', { ascending: false });
     } else {
-      // El usuario solo ve lo que va dirigido a su ID o es Global
       query = query
         .eq('tenant_id', tenant_id)
         .eq('target_user_id', userId);
@@ -145,6 +199,7 @@ export const getMyNotifications = async (req, res) => {
     if (error) throw error;
     res.status(200).json(data);
   } catch (error) {
+    console.error("❌ getMyNotifications Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -155,7 +210,7 @@ export const getMyNotifications = async (req, res) => {
 export const getSentNotifications = async (req, res) => {
   try {
     const { id, role, company_id } = req.user;
-    
+
     let query = supabase.from('notifications').select(`
       *,
       target_user:target_user_id (first_name, last_name, rut)
@@ -173,6 +228,7 @@ export const getSentNotifications = async (req, res) => {
     if (error) throw error;
     res.status(200).json(data);
   } catch (error) {
+    console.error("❌ getSentNotifications Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -185,8 +241,8 @@ export const markAsRead = async (req, res) => {
     const { id } = req.params;
     const { error } = await supabase
       .from('notifications')
-      .update({ 
-        is_read: true, 
+      .update({
+        is_read: true,
         read_at: new Date().toISOString()
       })
       .eq('id', id);
@@ -194,6 +250,7 @@ export const markAsRead = async (req, res) => {
     if (error) throw error;
     res.status(200).json({ success: true });
   } catch (error) {
+    console.error("❌ markAsRead Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -207,7 +264,7 @@ export const deleteNotification = async (req, res) => {
     const { role, company_id } = req.user;
 
     let query = supabase.from('notifications').delete().eq('id', id);
-    
+
     if (role !== 'ROOT') {
       query = query.eq('tenant_id', company_id);
     }
@@ -217,6 +274,7 @@ export const deleteNotification = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Notificación eliminada' });
   } catch (error) {
+    console.error("❌ deleteNotification Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -228,12 +286,12 @@ export const markAllAsRead = async (req, res) => {
   try {
     const userId = req.user.id;
     const now = new Date().toISOString();
-    
+
     const { error } = await supabase
       .from('notifications')
-      .update({ 
+      .update({
         is_read: true,
-        read_at: now 
+        read_at: now
       })
       .eq('target_user_id', userId)
       .eq('is_read', false);
@@ -241,6 +299,7 @@ export const markAllAsRead = async (req, res) => {
     if (error) throw error;
     res.status(200).json({ success: true });
   } catch (error) {
+    console.error("❌ markAllAsRead Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
