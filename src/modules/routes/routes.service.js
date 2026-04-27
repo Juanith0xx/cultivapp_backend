@@ -2,7 +2,7 @@ import db from "../../database/db.js";
 
 /* =========================================================
    OBTENER RUTAS POR EMPRESA (VISTA ADMINISTRADOR)
-   🚩 MEJORA: Uso de columna 'origin' para etiquetas precisas
+   🚩 MEJORA: Se incluye week_number para visualización mensual
 ========================================================= */
 export const getRoutesByCompany = async (company_id) => {
   try {
@@ -43,7 +43,7 @@ export const getRoutesByCompany = async (company_id) => {
 
 /* =========================================================
    CREAR RUTAS (BULK)
-   🚩 MEJORA: Prioridad a day_of_week y blindaje de fechas
+   🚩 MEJORA: Soporte para week_number (4 semanas S1-S4)
 ========================================================= */
 export const bulkCreateRoutes = async (tasks) => {
   const client = await db.connect();
@@ -56,11 +56,10 @@ export const bulkCreateRoutes = async (tasks) => {
       const { 
         company_id, user_id, local_id, visit_date, start_time, 
         order_sequence, warehouse_id, is_recurring, selectedDays, 
-        schedule_group_id, day_of_week, origin 
+        schedule_group_id, day_of_week, origin, week_number 
       } = task;
 
-      // 🚩 MEJORA CRÍTICA: Priorizamos el day_of_week si ya viene calculado (SaaS Bulk).
-      // Solo calculamos vía fecha si no hay day_of_week explícito.
+      // 🚩 Priorizamos el day_of_week si ya viene calculado.
       let calculatedDay = (day_of_week !== undefined && day_of_week !== null) 
         ? day_of_week 
         : null;
@@ -70,26 +69,28 @@ export const bulkCreateRoutes = async (tasks) => {
         calculatedDay = isNaN(d.getTime()) ? null : d.getDay();
       }
 
-      // 🚩 MEJORA: Determinamos qué días insertar basándonos en la recurrencia
+      // 🚩 Priorizamos el week_number o lo calculamos vía fecha si es individual
+      const finalWeekNumber = week_number || (visit_date ? Math.ceil(new Date(visit_date).getDate() / 7) : 1);
+
       const daysToInsert = (is_recurring && Array.isArray(selectedDays)) 
         ? selectedDays 
         : [calculatedDay];
 
       for (const day of daysToInsert) {
-        // Evitamos insertar si no hay un día de la semana válido definido
         if (day === null || day === undefined) continue;
 
         const cleanDay = parseInt(day, 10);
         const cleanOrder = parseInt(order_sequence, 10) || 0;
 
+        // 🚩 INSERT ACTUALIZADO: Se incluye week_number y ON CONFLICT mejorado
         const query = `
           INSERT INTO public.user_routes (
             company_id, user_id, local_id, visit_date, start_time, 
             order_sequence, warehouse_id, status, 
-            day_of_week, schedule_group_id, is_recurring, origin,
+            day_of_week, week_number, schedule_group_id, is_recurring, origin,
             created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, $11, NOW(), NOW()) 
-          ON CONFLICT (user_id, local_id, visit_date, day_of_week) 
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, $11, $12, NOW(), NOW()) 
+          ON CONFLICT (user_id, local_id, visit_date, day_of_week, week_number) 
           DO UPDATE SET 
             start_time = EXCLUDED.start_time, 
             origin = EXCLUDED.origin,
@@ -102,7 +103,7 @@ export const bulkCreateRoutes = async (tasks) => {
           company_id, user_id, local_id, 
           is_recurring ? null : (visit_date || null), 
           start_time, cleanOrder, warehouse_id || null,
-          cleanDay, schedule_group_id || null, is_recurring || false,
+          cleanDay, finalWeekNumber, schedule_group_id || null, is_recurring || false,
           origin || 'INDIVIDUAL'
         ]);
         
@@ -129,7 +130,7 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
     const query = `
       SELECT 
         ur.id, ur.visit_date, ur.start_time, ur.status, ur.order_sequence, 
-        ur.day_of_week, ur.is_recurring, ur.lat_in, ur.lng_in, ur.check_in,
+        ur.day_of_week, ur.week_number, ur.is_recurring, ur.lat_in, ur.lng_in, ur.check_in,
         ur.origin,
         l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
         c.name as comuna_name,

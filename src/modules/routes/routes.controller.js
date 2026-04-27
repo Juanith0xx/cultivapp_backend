@@ -1,18 +1,16 @@
 import * as routeService from "./routes.service.js";
 import crypto from "crypto";
-import db from "../../database/db.js"; 
+import db from "../../database/db.js";
 
-/**
- * 🛠️ UTILIDAD: Limpiar RUT (Normalización)
- */
+/* =========================================================
+   🛠️ UTILIDADES DE NORMALIZACIÓN Y VALIDACIÓN
+========================================================= */
+
 const cleanRutStr = (val) => {
   if (!val) return "";
   return String(val).replace(/[^0-9kK]/g, "").toUpperCase().trim();
 };
 
-/**
- * 🛠️ UTILIDAD: Validar y formatear HORA (HH:mm)
- */
 const validateTime = (timeStr) => {
   if (!timeStr) return "08:00";
   try {
@@ -22,9 +20,6 @@ const validateTime = (timeStr) => {
   } catch (e) { return "08:00"; }
 };
 
-/**
- * 🛠️ UTILIDAD: Validar y formatear FECHA (YYYY-MM-DD)
- */
 const validateDate = (dateVal) => {
   if (!dateVal) return null;
   try {
@@ -33,9 +28,6 @@ const validateDate = (dateVal) => {
   } catch (e) { return null; }
 };
 
-/**
- * Auxiliar: Cálculo de distancia (Haversine)
- */
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3; 
   const p1 = lat1 * Math.PI / 180;
@@ -50,43 +42,33 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 }
 
 /* =========================================================
-   1. CARGA MASIVA (Lógica SaaS Inteligente - Blindada)
+   1. CARGA MASIVA (Lógica SaaS Reforzada - Soporte 4 Semanas)
 ========================================================= */
 
 export const bulkCreate = async (req, res) => {
   const company_id = req.user.company_id;
-  console.log(`🚀 SaaS Bulk: Petición recibida para Empresa ${company_id}`);
+  console.log(`🚀 SaaS Bulk: Petición mensual recibida para Empresa ${company_id}`);
   
   try {
-    /**
-     * 🚩 ESTRATEGIA DE RESCATE MULTI-ORIGEN
-     * Capturamos los datos si vienen como JSON, FormData o String.
-     */
     let rawData = null;
 
     if (Array.isArray(req.body)) {
       rawData = req.body;
-    } else if (req.body && req.body.routes) {
-      // Si routes viene como string (común en FormData), lo parseamos
-      rawData = typeof req.body.routes === 'string' 
-        ? JSON.parse(req.body.routes) 
-        : req.body.routes;
-    } else if (req.body && req.body.data) {
-      rawData = typeof req.body.data === 'string' 
-        ? JSON.parse(req.body.data) 
-        : req.body.data;
+    } else if (req.body?.routes) {
+      rawData = typeof req.body.routes === 'string' ? JSON.parse(req.body.routes) : req.body.routes;
+    } else if (req.body?.data) {
+      rawData = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body.data;
+    } else if (typeof req.body === 'object' && req.body !== null) {
+      const keys = Object.keys(req.body);
+      if (keys.length > 0 && Array.isArray(req.body[keys[0]])) {
+        rawData = req.body[keys[0]];
+      }
     }
-
-    // LOG DE CONTROL PARA TERMINAL
-    console.log("------------------------------------------");
-    console.log("📦 Body Type:", typeof req.body);
-    console.log("📦 ¿Data encontrada?:", !!rawData ? `SÍ (${rawData.length} filas)` : "NO");
-    console.log("------------------------------------------");
 
     if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
       return res.status(400).json({ 
         success: false, 
-        message: "No se encontraron datos válidos. El servidor recibió un cuerpo vacío o mal formateado." 
+        message: "No se encontraron datos válidos." 
       });
     }
 
@@ -95,21 +77,19 @@ export const bulkCreate = async (req, res) => {
 
     for (let i = 0; i < rawData.length; i++) {
       const fila = rawData[i];
-      const keys = Object.keys(fila);
 
-      // Mapeo dinámico de turnos (Turno semana 1, 2, etc.)
-      const turnosSemana = keys
-        .filter(k => /turno/i.test(k) && /semana/i.test(k))
-        .map(k => fila[k])
-        .filter(t => t && String(t).trim() !== "" && String(t).toUpperCase() !== "NULL");
+      // Normalización de llaves por si vienen con espacios desde el Excel
+      const cleanFila = {};
+      Object.keys(fila).forEach(k => cleanFila[k.trim()] = fila[k]);
 
-      // Normalización basada en nombres comunes del Excel
-      const rutExcel = cleanRutStr(fila.Rut_Mercaderista || fila.rut || fila.RUT || fila["Rut 2"]);
-      const codigoLocal = String(fila.Codigo || fila.codigo || fila.center_code || "").trim();
+      const rutExcel = cleanRutStr(cleanFila.Rut_Mercaderista || cleanFila.rut);
+      const codigoLocal = String(cleanFila.Codigo || cleanFila.codigo || "").trim();
 
-      if (!rutExcel || !codigoLocal || turnosSemana.length === 0) continue;
+      if (!rutExcel || !codigoLocal) {
+        errors.push(`Fila ${i + 1}: Faltan RUT o Código de Local.`);
+        continue;
+      }
 
-      // Cruce con Base de Datos (Aislamiento por Company)
       const [userRes, localRes] = await Promise.all([
         db.query("SELECT id FROM public.users WHERE rut = $1 AND company_id = $2 LIMIT 1", [rutExcel, company_id]),
         db.query("SELECT id FROM public.locales WHERE codigo_local = $1 AND company_id = $2 LIMIT 1", [codigoLocal, company_id])
@@ -123,33 +103,45 @@ export const bulkCreate = async (req, res) => {
       const userId = userRes.rows[0].id;
       const localId = localRes.rows[0].id;
       const schedule_group_id = crypto.randomUUID();
-      const turnosUnicos = [...new Set(turnosSemana)];
 
-      for (const nombreTurno of turnosUnicos) {
-        // Búsqueda flexible de turnos configurados
-        const turnosRes = await db.query(
+      // --- PROCESAMIENTO DE LAS 4 SEMANAS ---
+      // Buscamos columnas que digan "Semana 1", "Semana 2", etc.
+      const semanaKeys = Object.keys(cleanFila).filter(k => 
+        k.toLowerCase().includes("turno") && k.toLowerCase().includes("semana")
+      );
+
+      for (const key of semanaKeys) {
+        const turnoNombre = cleanFila[key];
+        if (!turnoNombre || String(turnoNombre).toUpperCase() === "NULL") continue;
+
+        // Extraer el número de semana de la columna (ej: "Turno semana 1" -> 1)
+        const weekMatch = key.match(/\d+/);
+        const weekNumber = weekMatch ? parseInt(weekMatch[0]) : 1;
+
+        const turnoRes = await db.query(
           `SELECT day_of_week, entrada FROM public.turnos_config 
            WHERE company_id = $1 
            AND UPPER(REPLACE(nombre_turno, ' ', '')) = UPPER(REPLACE($2, ' ', '')) 
            AND is_active = true`,
-          [company_id, String(nombreTurno).trim()]
+          [company_id, String(turnoNombre).trim()]
         );
 
-        if (turnosRes.rows.length === 0) {
-          errors.push(`Fila ${i + 1}: El turno '${nombreTurno}' no está configurado.`);
+        if (turnoRes.rows.length === 0) {
+          errors.push(`Fila ${i + 1}: Turno '${turnoNombre}' no configurado en Semana ${weekNumber}.`);
           continue;
         }
 
-        turnosRes.rows.forEach(t => {
+        turnoRes.rows.forEach(t => {
           processedRoutes.push({
             company_id,
             user_id: userId,
             local_id: localId,
             start_time: t.entrada,
             day_of_week: parseInt(t.day_of_week, 10),
+            week_number: weekNumber, 
             schedule_group_id,
             is_recurring: true,
-            origin: 'TURNO',
+            origin: "BULK",
             visit_date: null
           });
         });
@@ -157,11 +149,7 @@ export const bulkCreate = async (req, res) => {
     }
 
     if (processedRoutes.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No se pudieron procesar rutas. Verifique RUTs y Nombres de Turnos.", 
-        errors 
-      });
+      return res.status(400).json({ success: false, message: "No se generaron rutas.", errors });
     }
 
     const result = await routeService.bulkCreateRoutes(processedRoutes);
@@ -193,6 +181,7 @@ export const createRoute = async (req, res) => {
       tasks = selectedDays.map(day => ({ 
         company_id, user_id, local_id, start_time: validateTime(start_time), 
         day_of_week: parseInt(day), 
+        week_number: 1, 
         schedule_group_id: groupId, is_recurring: true, origin: 'TURNO' 
       }));
     } else {
@@ -201,6 +190,7 @@ export const createRoute = async (req, res) => {
         company_id, user_id, local_id, start_time: validateTime(start_time), 
         visit_date: vDate, 
         day_of_week: vDate ? new Date(vDate + "T12:00:00").getDay() : null,
+        week_number: vDate ? Math.ceil(new Date(vDate).getDate() / 7) : 1,
         is_recurring: false, origin: 'INDIVIDUAL' 
       }];
     }
@@ -237,12 +227,10 @@ export const checkIn = async (req, res) => {
           distance_meters = $3, is_valid_gps = $4, updated_at = CURRENT_TIMESTAMP
       WHERE id = $5 ${role !== 'ROOT' ? 'AND company_id = $6' : ''}
       RETURNING *;
-    `, [parseFloat(lat_in), parseFloat(lng_in), Math.round(distance), isValidGps, id, ... (role !== 'ROOT' ? [targetCompanyId] : [])]);
+    `, [parseFloat(lat_in), parseFloat(lng_in), Math.round(distance), isValidGps, id, ...(role !== 'ROOT' ? [targetCompanyId] : [])]);
     
     res.json({ isValid: isValidGps, data: result.rows[0] });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
+  } catch (error) { res.status(400).json({ message: error.message }); }
 };
 
 export const finishVisit = async (req, res) => {
@@ -254,9 +242,7 @@ export const finishVisit = async (req, res) => {
       WHERE id = $1 ${!isRoot ? 'AND company_id = $2' : ''} RETURNING *;
     `, isRoot ? [id] : [id, req.user.company_id]);
     res.json({ success: true, data: result.rows[0] });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 export const getMyTasks = (req, res) => {
@@ -275,7 +261,7 @@ export const getAttendanceReport = async (req, res) => {
     const targetCompanyId = (role === 'ROOT' && req.query.company_id) ? req.query.company_id : company_id;
     
     let query = `
-      SELECT r.id, u.first_name, u.last_name, u.rut as worker_id, l.cadena as local_name, l.codigo_local as local_code, r.status, r.visit_date,
+      SELECT r.id, u.first_name, u.last_name, u.rut as worker_id, l.cadena as local_name, l.codigo_local as local_code, r.status, r.visit_date, r.week_number,
              TO_CHAR(r.start_time, 'HH24:MI') as plan_in, TO_CHAR(r.check_in, 'HH24:MI') as check_in,
              CASE WHEN r.check_in IS NOT NULL AND r.check_out IS NOT NULL THEN ROUND(EXTRACT(EPOCH FROM (r.check_out - r.check_in))/60) ELSE NULL END as working_time
       FROM public.user_routes r 
@@ -295,9 +281,7 @@ export const getAttendanceReport = async (req, res) => {
     }
     const result = await db.query(query + " ORDER BY r.visit_date DESC", params);
     res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: "Error al generar reporte" });
-  }
+  } catch (error) { res.status(500).json({ message: "Error al generar reporte" }); }
 };
 
 export const getLiveMonitoring = async (req, res) => {
@@ -309,9 +293,7 @@ export const getLiveMonitoring = async (req, res) => {
       WHERE r.status = 'IN_PROGRESS' ${filterCompany ? 'AND r.company_id = $1' : ''} ORDER BY r.check_in DESC;
     `, filterCompany ? [filterCompany] : []);
     res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: "Error en monitoreo" });
-  }
+  } catch (error) { res.status(500).json({ message: "Error en monitoreo" }); }
 };
 
 /* =========================================================
@@ -328,16 +310,12 @@ export const addVisitScan = async (req, res) => {
   try {
     const result = await db.query(`INSERT INTO public.visit_scans (visit_id, company_id, barcode) VALUES ($1, $2, $3) RETURNING *;`, [req.params.id, req.user.company_id, req.body.barcode]);
     res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 export const saveVisitPhoto = async (req, res) => {
   try {
     const result = await db.query(`INSERT INTO public.visit_photos (visit_id, company_id, image_url, evidence_type) VALUES ($1, $2, $3, $4) RETURNING *;`, [req.params.id, req.user.company_id, req.file.path, req.body.tipo_evidencia]);
     res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
