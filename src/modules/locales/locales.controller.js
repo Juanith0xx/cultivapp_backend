@@ -23,6 +23,27 @@ export const getLocales = async (req, res) => {
 };
 
 /* =========================================
+   🚩 OBTENER LOCALES POR SUPERVISOR (NUEVO)
+   Resuelve el error de importación en locales.routes.js
+========================================= */
+export const getLocalesBySupervisor = async (req, res) => {
+  try {
+    const { supervisor_id } = req.params;
+    
+    if (!supervisor_id) {
+      return res.status(400).json({ message: "ID de supervisor requerido" });
+    }
+
+    const locales = await localeService.getLocalesBySupervisor(supervisor_id);
+    res.json(locales);
+
+  } catch (error) {
+    console.error("❌ GET LOCALES BY SUPERVISOR ERROR:", error.message);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+/* =========================================
    CREAR LOCAL
 ========================================= */
 export const createLocal = async (req, res) => {
@@ -132,7 +153,6 @@ export const uploadLocales = async (req, res) => {
     }
 
     // 🚩 3. LEER EL ARCHIVO DESDE EL DISCO
-    // Como usas diskStorage, el buffer de req.file es null. Debemos leer req.file.path.
     const fileBuffer = fs.readFileSync(req.file.path);
 
     // 4. Procesar en el servicio

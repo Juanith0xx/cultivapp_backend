@@ -38,6 +38,35 @@ export const getLocales = async (company_id) => {
 }
 
 /* =========================================
+    🚩 OBTENER LOCALES POR SUPERVISOR (CARTERA)
+========================================= */
+export const getLocalesBySupervisor = async (supervisor_id) => {
+  try {
+    const query = `
+      SELECT 
+        l.*,
+        r.name AS region_name,
+        c.name AS comuna_name,
+        -- Mapeamos chain_id para que el filtro del frontend sea compatible
+        l.cadena as chain_id 
+      FROM public.locales l
+      INNER JOIN public.supervisor_locales sl ON l.id = sl.locale_id
+      LEFT JOIN regions r ON l.region_id = r.id
+      LEFT JOIN comunas c ON l.comuna_id = c.id
+      WHERE sl.supervisor_id = $1 
+        AND l.deleted_at IS NULL
+      ORDER BY l.cadena ASC;
+    `;
+    
+    const result = await db.query(query, [supervisor_id]);
+    return result.rows;
+  } catch (error) {
+    console.error("❌ Error en getLocalesBySupervisor Service:", error.message);
+    throw error;
+  }
+}
+
+/* =========================================
     OBTENER LOCAL POR ID
 ========================================= */
 export const getLocalById = async (id) => {

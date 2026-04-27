@@ -21,7 +21,7 @@ export const sendNotification = async (req, res) => {
       type: type || 'info',
       scope,
       is_read: false,
-      read_at: null, // 🚩 Inicializamos vacío
+      read_at: null,
       target_user_id: scope === 'individual' ? targetId : null,
       target_local_id: scope === 'local' ? targetId : null
     };
@@ -37,45 +37,85 @@ export const sendNotification = async (req, res) => {
 
 /**
  * 🔥 ENVIAR NOTIFICACIONES MASIVAS (Bulk)
+ * MEJORADO: Cruce automático con planificación para Punto de Venta
  */
 export const sendBulkNotifications = async (req, res) => {
   try {
-    const { title, message, scope, targetIds, companyId, localId } = req.body;
+    const { title, message, scope, targetIds, companyId, localId, type } = req.body;
     const sender_id = req.user.id;
     const tenant_id = req.user.role === 'ROOT' ? companyId : req.user.company_id;
 
     let notifications = [];
 
-    if (scope === 'global') {
-      notifications = [{
-        tenant_id,
-        sender_id,
-        title,
-        message,
-        scope: 'global',
-        is_read: false,
-        type: 'info'
-      }];
-    } else {
-      notifications = targetIds.map(id => ({
-        tenant_id,
-        sender_id,
-        title,
-        message,
-        scope,
-        is_read: false,
-        read_at: null,
-        target_user_id: scope === 'individual' ? id : null,
-        target_local_id: scope === 'local' ? localId : null,
-        type: 'info'
+    // --- CASO 1: EMISIÓN GLOBAL (EMPRESA) ---
+    if (scope === 'TODOS') {
+      // Buscamos todos los usuarios activos de la empresa
+      const { data: users } = await supabase
+        .from('users')
+        .select('id')
+        .eq('company_id', tenant_id)
+        .is('deleted_at', null);
+
+      notifications = users.map(u => ({
+        tenant_id, sender_id, title, message, scope: 'global',
+        is_read: false, type: type || 'info', target_user_id: u.id
       }));
+    } 
+
+    // --- CASO 2: EMISIÓN POR PUNTO DE VENTA (DINÁMICO) ---
+    else if (scope === 'local') {
+      // 🚩 CRUCE DE DATOS: Buscamos quiénes están en el local HOY
+      const today = new Date().getDay(); // 0 (Dom) a 6 (Sab)
+      const todayIso = new Date().toISOString().split('T')[0];
+
+      const { data: routes, error: routeError } = await supabase
+        .from('user_routes')
+        .select('user_id')
+        .eq('local_id', localId)
+        .is('deleted_at', null)
+        .or(`visit_date.eq.${todayIso},and(is_recurring.eq.true,day_of_week.eq.${today})`);
+
+      if (routeError) throw routeError;
+
+      // Obtenemos IDs únicos de los mercaderistas presentes
+      const uniqueUserIds = [...new Set(routes.map(r => r.user_id))];
+
+      if (uniqueUserIds.length === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'No hay mercaderistas planificados en este local para hoy.' 
+        });
+      }
+
+      notifications = uniqueUserIds.map(uid => ({
+        tenant_id, sender_id, title, message, scope: 'local',
+        is_read: false, type: type || 'info', 
+        target_user_id: uid, 
+        target_local_id: localId
+      }));
+    }
+
+    // --- CASO 3: SELECCIÓN INDIVIDUAL ---
+    else if (scope === 'individual') {
+      notifications = targetIds.map(id => ({
+        tenant_id, sender_id, title, message, scope: 'individual',
+        is_read: false, target_user_id: id, type: type || 'info'
+      }));
+    }
+
+    if (notifications.length === 0) {
+      return res.status(400).json({ success: false, message: 'No se generaron destinatarios' });
     }
 
     const { error } = await supabase.from('notifications').insert(notifications);
     if (error) throw error;
 
-    res.status(201).json({ success: true, message: 'Alertas masivas enviadas con éxito' });
+    res.status(201).json({ 
+      success: true, 
+      message: `Instrucción enviada a ${notifications.length} mercaderistas.` 
+    });
   } catch (error) {
+    console.error("Bulk Error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -85,18 +125,17 @@ export const sendBulkNotifications = async (req, res) => {
  */
 export const getMyNotifications = async (req, res) => {
   try {
-    const { id: userId, company_id: tenant_id, local_id, role } = req.user;
+    const { id: userId, company_id: tenant_id, role } = req.user;
 
     let query = supabase.from('notifications').select('*');
 
     if (role === 'ROOT') {
       query = query.order('created_at', { ascending: false });
     } else {
-      let orFilter = `target_user_id.eq.${userId},scope.eq.global`;
-      if (local_id) {
-        orFilter += `,and(scope.eq.local,target_local_id.eq.${local_id})`;
-      }
-      query = query.or(orFilter).eq('tenant_id', tenant_id);
+      // El usuario solo ve lo que va dirigido a su ID o es Global
+      query = query
+        .eq('tenant_id', tenant_id)
+        .eq('target_user_id', userId);
     }
 
     const { data, error } = await query
@@ -111,14 +150,12 @@ export const getMyNotifications = async (req, res) => {
 };
 
 /**
- * 📤 HISTORIAL DE ENVIADOS (Aquí es donde el Supervisor ve el Check)
- * Se agregó 'read_at' y 'is_read' en el select para la trazabilidad.
+ * 📤 HISTORIAL DE ENVIADOS (Trazabilidad para Supervisor)
  */
 export const getSentNotifications = async (req, res) => {
   try {
     const { id, role, company_id } = req.user;
     
-    // 🚩 Traemos también datos del destinatario para que el Supervisor sepa quién leyó
     let query = supabase.from('notifications').select(`
       *,
       target_user:target_user_id (first_name, last_name, rut)
@@ -141,7 +178,7 @@ export const getSentNotifications = async (req, res) => {
 };
 
 /**
- * ✅ MARCAR COMO LEÍDA (Mejorado con Timestamp)
+ * ✅ MARCAR COMO LEÍDA
  */
 export const markAsRead = async (req, res) => {
   try {
@@ -150,7 +187,7 @@ export const markAsRead = async (req, res) => {
       .from('notifications')
       .update({ 
         is_read: true, 
-        read_at: new Date().toISOString() // 🚩 Grabamos la hora de lectura
+        read_at: new Date().toISOString()
       })
       .eq('id', id);
 

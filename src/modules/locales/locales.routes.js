@@ -10,7 +10,8 @@ import {
   updateLocal,
   toggleLocal,
   deleteLocal,
-  uploadLocales
+  uploadLocales,
+  getLocalesBySupervisor // 🚩 Nueva importación
 } from "./locales.controller.js"
 
 const router = Router()
@@ -27,6 +28,15 @@ router.use(auth)
 router.get(
   "/",
   getLocales
+)
+
+/* =========================================
+   🚩 OBTENER LOCALES POR SUPERVISOR (CARTERA)
+   Habilita la sincronización con el Centro de Notificaciones
+========================================= */
+router.get(
+  "/supervisor/:supervisor_id",
+  getLocalesBySupervisor
 )
 
 /* =========================================
