@@ -11,14 +11,19 @@ const generateTempPassword = () => {
 }
 
 /* =========================================================
-   GET PUBLIC USER INFO
+   GET PUBLIC USER INFO (🚩 MEJORA: JOIN con companies y nuevas fechas)
 ========================================================= */
 export const getPublicUserInfo = async (id) => {
   const result = await db.query(
-    `SELECT id, first_name, last_name, rut, position, foto_url, 
-      fecha_contrato, tipo_contrato, achs_url, is_active, 
-      supervisor_nombre, supervisor_telefono
-     FROM public.users WHERE id = $1 AND deleted_at IS NULL`, [id]
+    `SELECT 
+      u.id, u.first_name, u.last_name, u.rut, u.position, u.foto_url, 
+      u.fecha_inicio_contrato, u.fecha_termino_contrato, -- 🚩 Nuevas columnas
+      u.tipo_contrato, u.achs_url, u.is_active, 
+      u.supervisor_nombre, u.supervisor_telefono,
+      c.name as empresa_cliente -- 🚩 JOIN para evitar error de columna inexistente
+     FROM public.users u
+     LEFT JOIN public.companies c ON u.company_id = c.id
+     WHERE u.id = $1 AND u.deleted_at IS NULL`, [id]
   )
   return result.rows[0]
 }
@@ -30,19 +35,19 @@ export const getUserById = async (id) => {
   const result = await db.query(
     `SELECT id, company_id, first_name, last_name, email, role, 
       is_active, phone, position, rut, foto_url, achs_url, tipo_contrato,
-      fecha_contrato, supervisor_nombre, supervisor_telefono
+      fecha_inicio_contrato, fecha_termino_contrato, -- 🚩 Actualizado
+      supervisor_nombre, supervisor_telefono
      FROM public.users WHERE id = $1 AND deleted_at IS NULL`, [id]
   )
   return result.rows[0]
 }
 
 /* =========================================================
-   CREATE USER (🚩 FIX ROOT COMPATIBILITY)
+   CREATE USER (🚩 FIX: Inserción con nuevas fechas)
 ========================================================= */
 export const createUser = async (data) => {
   const { first_name, email, password, role, company_id } = data;
 
-  // 🚩 FIX: Permitimos company_id NULL solo si el rol es ROOT
   if (!first_name || !email || !password || !role) {
     throw new Error("Faltan campos obligatorios");
   }
@@ -56,7 +61,6 @@ export const createUser = async (data) => {
   )
   if (emailExists.rows.length > 0) throw new Error("El correo ya está registrado")
 
-  // Solo validamos límites si NO es ROOT
   if (role !== 'ROOT') {
     const companyResult = await db.query(
       `SELECT max_supervisors, max_users, max_view, is_active FROM public.companies WHERE id = $1 AND deleted_at IS NULL`, [company_id]
@@ -81,13 +85,16 @@ export const createUser = async (data) => {
     `INSERT INTO public.users
      (company_id, first_name, last_name, email, password_hash, role, is_active, 
       must_change_password, phone, position, rut, foto_url, achs_url, 
-      tipo_contrato, fecha_contrato, supervisor_nombre, supervisor_telefono)
-     VALUES ($1, $2, $3, $4, $5, $6, true, false, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      tipo_contrato, fecha_inicio_contrato, fecha_termino_contrato, -- 🚩 Nuevas columnas
+      supervisor_nombre, supervisor_telefono)
+     VALUES ($1, $2, $3, $4, $5, $6, true, false, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      RETURNING id, first_name, last_name, email, role, company_id`,
     [
       company_id || null, data.first_name, data.last_name, email, hashedPassword, role,
       data.phone, data.position, data.rut, data.foto_url, data.achs_url, 
-      data.tipo_contrato || 'Plazo Fijo', data.fecha_contrato || null, 
+      data.tipo_contrato || 'Plazo Fijo', 
+      data.fecha_inicio_contrato || null, 
+      data.fecha_termino_contrato || null, 
       data.supervisor_nombre, data.supervisor_telefono
     ]
   )
@@ -95,14 +102,15 @@ export const createUser = async (data) => {
 }
 
 /* =========================================================
-   GET USERS (🚩 FIX ROOT GLOBAL VIEW)
+   GET USERS (🚩 FIX: Soporte para nuevas fechas)
 ========================================================= */
 export const getUsers = async (role, company_id) => {
   let query = `
     SELECT 
       u.id, u.first_name, u.last_name, u.email, u.role, u.is_active, 
       u.company_id, u.phone, u.position, u.rut, u.foto_url, u.achs_url,
-      u.tipo_contrato, u.fecha_contrato, u.supervisor_nombre, u.supervisor_telefono,
+      u.tipo_contrato, u.fecha_inicio_contrato, u.fecha_termino_contrato, -- 🚩 Actualizado
+      u.supervisor_nombre, u.supervisor_telefono,
       c.name AS company_name
     FROM public.users u
     LEFT JOIN public.companies c ON u.company_id = c.id
@@ -115,7 +123,6 @@ export const getUsers = async (role, company_id) => {
     query += ` AND u.role = $${values.length}`
   }
 
-  // 🚩 FIX: Si company_id llega, filtramos. Si no (ROOT), traemos todo.
   if (company_id) {
     values.push(company_id)
     query += ` AND u.company_id = $${values.length}`
@@ -127,10 +134,9 @@ export const getUsers = async (role, company_id) => {
 }
 
 /* =========================================================
-   GET COMPANY STATS (🚩 FIX ROOT CRASH)
+   GET COMPANY STATS
 ========================================================= */
 export const getCompanyStats = async (company_id) => {
-  // 🚩 Si no hay company_id (ROOT pidiendo dashboard global sin filtro)
   if (!company_id) {
      return { counts: { SUPERVISOR: 0, USUARIO: 0, VIEW: 0 }, limits: { max_supervisors: 0, max_users: 0, max_view: 0 } };
   }

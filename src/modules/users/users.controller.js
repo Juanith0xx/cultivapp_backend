@@ -1,21 +1,34 @@
 import * as userService from "../users/users.service.js";
-import db from "../../database/db.js"; // 🚩 Asegúrate de que esta importación sea correcta según tu estructura
+import db from "../../database/db.js"; 
 
 /* =========================================
    GET PUBLIC USER CREDENTIAL
+   🚩 MEJORA: Consulta con JOIN y nuevas fechas de vigencia
 ========================================= */
 export const getPublicUserCredential = async (req, res) => {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ message: "ID no proporcionado" });
 
-    const user = await userService.getPublicUserInfo(id);
+    const query = `
+      SELECT 
+        u.id, u.first_name, u.last_name, u.position, u.foto_url, u.rut, 
+        u.fecha_inicio_contrato, u.fecha_termino_contrato, 
+        u.is_active, u.achs_url, u.tipo_contrato,
+        u.supervisor_nombre, u.supervisor_telefono,
+        c.name as empresa_cliente
+      FROM public.users u
+      LEFT JOIN public.companies c ON u.company_id = c.id
+      WHERE u.id = $1 AND u.deleted_at IS NULL;
+    `;
 
-    if (!user) {
-      return res.status(404).json({ message: "Credencial no válida o expirada" });
+    const result = await db.query(query, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Credencial no válida o inexistente" });
     }
 
-    res.json(user);
+    res.json(result.rows[0]);
   } catch (error) {
     console.error("❌ ERROR CREDENCIAL PÚBLICA:", error.message);
     res.status(500).json({ message: "Error al obtener la credencial" });
@@ -24,6 +37,7 @@ export const getPublicUserCredential = async (req, res) => {
 
 /* =========================================
    CREATE USER
+   🚩 MEJORA: Soporte para rango de fechas de contrato
 ========================================= */
 export const createUser = async (req, res) => {
   try {
@@ -46,6 +60,10 @@ export const createUser = async (req, res) => {
       }
     }
 
+    // Normalizar fechas para Postgres
+    payload.fecha_inicio_contrato = payload.fecha_inicio_contrato || null;
+    payload.fecha_termino_contrato = payload.fecha_termino_contrato || null;
+
     const user = await userService.createUser(payload);
     res.status(201).json(user);
   } catch (error) {
@@ -55,40 +73,69 @@ export const createUser = async (req, res) => {
 
 /* =========================================
    UPDATE USER
+   🚩 MEJORA: Consulta directa para evitar "updateUser is not a function"
 ========================================= */
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
     const loggedUser = req.user;
 
-    const existingUser = await userService.getUserById(id);
-    if (!existingUser) return res.status(404).json({ message: "Usuario no encontrado" });
+    // Verificar existencia y permisos
+    const checkQuery = `SELECT id, role, company_id, foto_url, achs_url FROM users WHERE id = $1 AND deleted_at IS NULL`;
+    const checkResult = await db.query(checkQuery, [id]);
+    
+    if (checkResult.rows.length === 0) return res.status(404).json({ message: "Usuario no encontrado" });
+    const existingUser = checkResult.rows[0];
 
     if (existingUser.role === "ROOT") return res.status(403).json({ message: "ROOT es inmutable" });
-    
     if (loggedUser.role === "ADMIN_CLIENTE" && existingUser.company_id !== loggedUser.company_id) {
       return res.status(403).json({ message: "Acceso denegado" });
     }
 
     let payload = { ...req.body };
 
+    // Procesar archivos
+    let foto_final = payload.foto_url || existingUser.foto_url;
+    let achs_final = payload.achs_url || existingUser.achs_url;
+
     if (req.files) {
       if (req.files.foto) {
-        payload.foto_url = `/${req.files.foto[0].path.replace(/\\/g, "/")}`;
+        foto_final = `/${req.files.foto[0].path.replace(/\\/g, "/")}`;
       }
       if (req.files.documento_achs) {
-        payload.achs_url = `/${req.files.documento_achs[0].path.replace(/\\/g, "/")}`;
+        achs_final = `/${req.files.documento_achs[0].path.replace(/\\/g, "/")}`;
       }
     }
 
-    if (loggedUser.role === "ADMIN_CLIENTE" && ["ROOT", "ADMIN_CLIENTE"].includes(payload.role)) {
-      delete payload.role;
-    }
+    // Normalización de fechas (Evita error 400 por strings vacíos en tipos DATE)
+    const f_inicio = payload.fecha_inicio_contrato && payload.fecha_inicio_contrato !== "" ? payload.fecha_inicio_contrato : null;
+    const f_termino = payload.fecha_termino_contrato && payload.fecha_termino_contrato !== "" ? payload.fecha_termino_contrato : null;
 
-    const updated = await userService.updateUser(id, payload);
-    res.json(updated);
+    const updateQuery = `
+      UPDATE public.users 
+      SET 
+        first_name = $1, last_name = $2, email = $3, role = $4, 
+        rut = $5, position = $6, tipo_contrato = $7, 
+        fecha_inicio_contrato = $8, fecha_termino_contrato = $9, 
+        supervisor_nombre = $10, supervisor_telefono = $11, 
+        foto_url = $12, achs_url = $13, updated_at = NOW()
+      WHERE id = $14
+      RETURNING id, first_name, last_name, email;
+    `;
+
+    const values = [
+      payload.first_name, payload.last_name, payload.email, payload.role,
+      payload.rut, payload.position, payload.tipo_contrato,
+      f_inicio, f_termino,
+      payload.supervisor_nombre, payload.supervisor_telefono,
+      foto_final, achs_final, id
+    ];
+
+    const result = await db.query(updateQuery, values);
+    res.json(result.rows[0]);
+
   } catch (error) {
-    console.error("❌ UPDATE USER ERROR:", error);
+    console.error("❌ UPDATE USER ERROR:", error.message);
     res.status(400).json({ message: error.message });
   }
 };
@@ -197,15 +244,13 @@ export const getCompanyStats = async (req, res) => {
 
 /* =========================================
    NUEVA MEJORA: UPDATE USER CONTACT
-   (Consulta Directa a DB para evitar fallos de servicio)
-   ========================================= */
+========================================= */
 export const updateUserContact = async (req, res) => {
   try {
     const { id } = req.params;
     const { email, phone } = req.body;
     const loggedUser = req.user;
 
-    // 1. Verificación de permisos básica
     const targetUser = await userService.getUserById(id);
     if (!targetUser) return res.status(404).json({ message: "Usuario no encontrado" });
 
@@ -213,7 +258,6 @@ export const updateUserContact = async (req, res) => {
       return res.status(403).json({ message: "No tienes permisos para editar este usuario" });
     }
 
-    // 2. Consulta Directa
     const query = `
       UPDATE users 
       SET 
@@ -235,12 +279,9 @@ export const updateUserContact = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ UPDATE CONTACT ERROR:", error.message);
-    
-    // Error de email duplicado en Postgres
     if (error.code === '23505') {
         return res.status(400).json({ message: "El correo ya está siendo usado por otro usuario" });
     }
-    
     res.status(500).json({ message: "Error interno al actualizar" });
   }
 };
