@@ -8,11 +8,13 @@ export const login = async (req, res) => {
   try {
     const result = await authService.loginUser(req.body)
     
-    // 🚩 DEBUG: Verificamos que el login traiga la empresa antes de responder
+    // 🚩 DEBUG MEJORADO: Verificamos si el service está trayendo el nombre y apellido
     console.log("🔑 LOGIN EXITOSO:", {
       user: result.user.email,
-      company_id: result.user.company_id, // Si esto es undefined, el error está en el Service
-      role: result.user.role
+      company_id: result.user.company_id, 
+      role: result.user.role,
+      first_name: result.user.first_name, // Si dice undefined, el error está en el Service
+      last_name: result.user.last_name    // Si dice undefined, el error está en el Service
     });
 
     return res.status(200).json(result)

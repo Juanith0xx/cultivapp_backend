@@ -21,6 +21,7 @@ export const loginUser = async ({ email, password }) => {
     SELECT 
       u.id,
       u.first_name,
+      u.last_name,   -- 🚩 Añadido: Faltaba pedir el apellido a la BD
       u.email,
       u.password_hash,
       u.role,
@@ -68,11 +69,10 @@ export const loginUser = async ({ email, password }) => {
   await logAction(user.id, "LOGIN")
 
   // 4. Generación de Token con Payload Completo
-  // 🚩 IMPORTANTE: 'company_id' debe ir en el primer nivel del payload
   const tokenPayload = {
     sub: user.id,           
     id: user.id,            
-    company_id: user.company_id, // 👈 Clave para que los turnos funcionen
+    company_id: user.company_id, 
     session_id: sessionId,
     role: user.role,
     aud: 'authenticated'
@@ -86,7 +86,10 @@ export const loginUser = async ({ email, password }) => {
     must_change_password: Boolean(user.must_change_password),
     user: {
       id: user.id,
-      name: user.first_name,
+      name: user.first_name, // Lo mantenemos por si algún otro componente lo usa
+      first_name: user.first_name, // 🚩 Añadido para el perfil de usuario
+      last_name: user.last_name,   // 🚩 Añadido para el perfil de usuario y avatar
+      email: user.email,           // 🚩 Añadido el email por buena práctica
       role: user.role,
       company_id: user.company_id,
       company_name: user.company_name || 'Sin Empresa'
@@ -119,5 +122,3 @@ export const updatePassword = async (userId, newPassword) => {
   await logAction(userId, "CHANGE_PASSWORD")
   return true
 }
-
-// ... (Resto de funciones: createPasswordResetToken y resetPasswordWithToken se mantienen igual)
