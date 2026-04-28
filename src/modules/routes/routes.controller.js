@@ -46,9 +46,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 ========================================================= */
 
 export const bulkCreate = async (req, res) => {
-  const company_id = req.user.company_id;
-  console.log(`🚀 SaaS Bulk: Petición mensual recibida para Empresa ${company_id}`);
-  
   try {
     let rawData = null;
 
@@ -72,18 +69,30 @@ export const bulkCreate = async (req, res) => {
       });
     }
 
+    let targetCompanyId = req.user.company_id;
+    if (req.user.role === 'ROOT') {
+      targetCompanyId = req.body.company_id || rawData[0]?.company_id || req.user.company_id;
+    }
+
+    console.log(`🚀 SaaS Bulk: Procesando rutas para Empresa: ${targetCompanyId}`);
+
     const processedRoutes = [];
     const errors = [];
 
     for (let i = 0; i < rawData.length; i++) {
       const fila = rawData[i];
 
-      // Normalización de llaves por si vienen con espacios desde el Excel
       const cleanFila = {};
-      Object.keys(fila).forEach(k => cleanFila[k.trim()] = fila[k]);
+      Object.keys(fila).forEach(k => {
+        cleanFila[k.trim().toLowerCase()] = fila[k];
+      });
 
-      const rutExcel = cleanRutStr(cleanFila.Rut_Mercaderista || cleanFila.rut);
-      const codigoLocal = String(cleanFila.Codigo || cleanFila.codigo || "").trim();
+      const rutExcel = cleanRutStr(
+        cleanFila["rut_mercaderista"] || cleanFila["rut"] || ""
+      );
+      const codigoLocal = String(
+        cleanFila["codigo"] || cleanFila["codigo_local"] || ""
+      ).trim();
 
       if (!rutExcel || !codigoLocal) {
         errors.push(`Fila ${i + 1}: Faltan RUT o Código de Local.`);
@@ -91,12 +100,17 @@ export const bulkCreate = async (req, res) => {
       }
 
       const [userRes, localRes] = await Promise.all([
-        db.query("SELECT id FROM public.users WHERE rut = $1 AND company_id = $2 LIMIT 1", [rutExcel, company_id]),
-        db.query("SELECT id FROM public.locales WHERE codigo_local = $1 AND company_id = $2 LIMIT 1", [codigoLocal, company_id])
+        db.query(
+          `SELECT id FROM public.users 
+           WHERE UPPER(REPLACE(REPLACE(rut, '.', ''), '-', '')) = UPPER(REPLACE(REPLACE($1, '.', ''), '-', ''))
+           AND company_id = $2 LIMIT 1`,
+          [rutExcel, targetCompanyId]
+        ),
+        db.query("SELECT id FROM public.locales WHERE codigo_local = $1 AND company_id = $2 LIMIT 1", [codigoLocal, targetCompanyId])
       ]);
 
       if (userRes.rows.length === 0 || localRes.rows.length === 0) {
-        errors.push(`Fila ${i + 1}: RUT ${rutExcel} o Local ${codigoLocal} no existen.`);
+        errors.push(`Fila ${i + 1}: RUT ${rutExcel} o Local ${codigoLocal} no existen en esta empresa.`);
         continue;
       }
 
@@ -104,8 +118,6 @@ export const bulkCreate = async (req, res) => {
       const localId = localRes.rows[0].id;
       const schedule_group_id = crypto.randomUUID();
 
-      // --- PROCESAMIENTO DE LAS 4 SEMANAS ---
-      // Buscamos columnas que digan "Semana 1", "Semana 2", etc.
       const semanaKeys = Object.keys(cleanFila).filter(k => 
         k.toLowerCase().includes("turno") && k.toLowerCase().includes("semana")
       );
@@ -114,7 +126,6 @@ export const bulkCreate = async (req, res) => {
         const turnoNombre = cleanFila[key];
         if (!turnoNombre || String(turnoNombre).toUpperCase() === "NULL") continue;
 
-        // Extraer el número de semana de la columna (ej: "Turno semana 1" -> 1)
         const weekMatch = key.match(/\d+/);
         const weekNumber = weekMatch ? parseInt(weekMatch[0]) : 1;
 
@@ -123,7 +134,7 @@ export const bulkCreate = async (req, res) => {
            WHERE company_id = $1 
            AND UPPER(REPLACE(nombre_turno, ' ', '')) = UPPER(REPLACE($2, ' ', '')) 
            AND is_active = true`,
-          [company_id, String(turnoNombre).trim()]
+          [targetCompanyId, String(turnoNombre).trim()]
         );
 
         if (turnoRes.rows.length === 0) {
@@ -133,12 +144,12 @@ export const bulkCreate = async (req, res) => {
 
         turnoRes.rows.forEach(t => {
           processedRoutes.push({
-            company_id,
+            company_id: targetCompanyId, 
             user_id: userId,
             local_id: localId,
             start_time: t.entrada,
             day_of_week: parseInt(t.day_of_week, 10),
-            week_number: weekNumber, 
+            week_number: weekNumber,
             schedule_group_id,
             is_recurring: true,
             origin: "BULK",
@@ -168,30 +179,52 @@ export const bulkCreate = async (req, res) => {
 
 /* =========================================================
    2. OPERACIONES INDIVIDUALES Y MONITOREO
+   🚩 FIX: Integración de 'selectedWeeks' desde el Frontend
 ========================================================= */
 
 export const createRoute = async (req, res) => {
   try {
-    const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring } = req.body;
+    // 🚩 Capturamos selectedWeeks (Ej: [1, 3] o [1, 2, 3, 4])
+    const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring, selectedWeeks } = req.body;
     const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
     
-    let tasks;
+    let tasks = [];
+
     if (is_recurring && selectedDays?.length > 0) {
       const groupId = crypto.randomUUID();
-      tasks = selectedDays.map(day => ({ 
-        company_id, user_id, local_id, start_time: validateTime(start_time), 
-        day_of_week: parseInt(day), 
-        week_number: 1, 
-        schedule_group_id: groupId, is_recurring: true, origin: 'TURNO' 
-      }));
+      
+      // 🚩 Si el frontend mandó semanas específicas, las usamos. Si no, usamos las 4 por defecto.
+      const weeksToApply = (selectedWeeks && Array.isArray(selectedWeeks) && selectedWeeks.length > 0) 
+        ? selectedWeeks 
+        : [1, 2, 3, 4];
+
+      weeksToApply.forEach(week => {
+        selectedDays.forEach(day => {
+          tasks.push({ 
+            company_id, 
+            user_id, 
+            local_id, 
+            start_time: validateTime(start_time), 
+            day_of_week: parseInt(day), 
+            week_number: parseInt(week), // 🚩 Se asigna la semana seleccionada
+            schedule_group_id: groupId, 
+            is_recurring: true, 
+            origin: 'TURNO' 
+          });
+        });
+      });
     } else {
       const vDate = validateDate(visit_date);
+      const dayNum = vDate ? new Date(vDate + "T12:00:00").getDate() : 1;
+      const weekCalc = Math.min(Math.ceil(dayNum / 7), 4);
+
       tasks = [{ 
         company_id, user_id, local_id, start_time: validateTime(start_time), 
         visit_date: vDate, 
         day_of_week: vDate ? new Date(vDate + "T12:00:00").getDay() : null,
-        week_number: vDate ? Math.ceil(new Date(vDate).getDate() / 7) : 1,
-        is_recurring: false, origin: 'INDIVIDUAL' 
+        week_number: weekCalc,
+        is_recurring: false, 
+        origin: 'INDIVIDUAL' 
       }];
     }
 
@@ -254,6 +287,9 @@ export const getMyTasks = (req, res) => {
   ).then(tasks => res.json(tasks || [])).catch(err => res.status(400).json({ message: err.message }));
 };
 
+/* =========================================================
+   🚩 FIX: getAttendanceReport AHORA FILTRA POR SEMANA
+========================================================= */
 export const getAttendanceReport = async (req, res) => {
   try {
     const { company_id, role } = req.user;
@@ -276,12 +312,41 @@ export const getAttendanceReport = async (req, res) => {
       params.push(`%${search}%`);
     } else {
       const reportDate = validateDate(date) || new Date().toISOString().split('T')[0];
-      query += ` AND (DATE(r.check_in) = $2 OR r.visit_date = $2 OR (r.is_recurring = true AND r.day_of_week = EXTRACT(DOW FROM $2::date)))`;
+      
+      // 🚩 CALCULADOR INTELIGENTE DE SEMANAS
+      const d = new Date(reportDate + "T12:00:00");
+      const isoDay = d.getDay() === 0 ? 7 : d.getDay();
+      const currentMonday = new Date(d);
+      currentMonday.setDate(d.getDate() - isoDay + 1);
+      const month = currentMonday.getMonth();
+      const year = currentMonday.getFullYear();
+      let firstMonday = new Date(year, month, 1, 12, 0, 0);
+      let fmIsoDay = firstMonday.getDay() === 0 ? 7 : firstMonday.getDay();
+      if (fmIsoDay !== 1) firstMonday.setDate(1 + (8 - fmIsoDay));
+
+      const diffWeeks = Math.floor((currentMonday.getTime() - firstMonday.getTime()) / (1000 * 60 * 60 * 24 * 7));
+      const calculatedWeek = diffWeeks < 0 ? 4 : Math.min(diffWeeks + 1, 4);
+
+      query += ` AND (
+        DATE(r.check_in) = $2 
+        OR r.visit_date = $2 
+        OR (
+          r.is_recurring = true 
+          AND r.day_of_week = EXTRACT(DOW FROM $2::date)::integer
+          AND r.week_number = $3::integer
+        )
+      )`;
       params.push(reportDate);
+      params.push(calculatedWeek); // Añadimos la semana como parámetro
     }
-    const result = await db.query(query + " ORDER BY r.visit_date DESC", params);
+    
+    // Agregamos un ORDER BY para que la lista salga ordenada visualmente
+    const result = await db.query(query + " ORDER BY r.start_time ASC, u.first_name ASC", params);
     res.json(result.rows);
-  } catch (error) { res.status(500).json({ message: "Error al generar reporte" }); }
+  } catch (error) { 
+    console.error("❌ Error en getAttendanceReport:", error);
+    res.status(500).json({ message: "Error al generar reporte" }); 
+  }
 };
 
 export const getLiveMonitoring = async (req, res) => {

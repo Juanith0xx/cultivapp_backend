@@ -2,7 +2,6 @@ import db from "../../database/db.js";
 
 /* =========================================================
    OBTENER RUTAS POR EMPRESA (VISTA ADMINISTRADOR)
-   🚩 MEJORA: Uso de columna 'origin' para etiquetas precisas
 ========================================================= */
 export const getRoutesByCompany = async (company_id) => {
   try {
@@ -41,9 +40,7 @@ export const getRoutesByCompany = async (company_id) => {
 };
 
 /* =========================================================
-   CREAR RUTAS (BULK)
-   🚩 MEJORA: Prioridad a day_of_week y blindaje de fechas
-   🚀 NUEVO: Notificaciones en tiempo real SIN duplicados
+   CREAR RUTAS (BULK & MANUALES)
 ========================================================= */
 export const bulkCreateRoutes = async (tasks) => {
   const client = await db.connect();
@@ -56,7 +53,7 @@ export const bulkCreateRoutes = async (tasks) => {
       const { 
         company_id, user_id, local_id, visit_date, start_time, 
         order_sequence, warehouse_id, is_recurring, selectedDays, 
-        schedule_group_id, day_of_week, origin 
+        schedule_group_id, day_of_week, origin, week_number 
       } = task;
 
       let calculatedDay = (day_of_week !== undefined && day_of_week !== null) 
@@ -77,15 +74,16 @@ export const bulkCreateRoutes = async (tasks) => {
 
         const cleanDay = parseInt(day, 10);
         const cleanOrder = parseInt(order_sequence, 10) || 0;
+        const safeWeek = week_number || 1;
 
         const query = `
           INSERT INTO public.user_routes (
             company_id, user_id, local_id, visit_date, start_time, 
             order_sequence, warehouse_id, status, 
-            day_of_week, schedule_group_id, is_recurring, origin,
+            day_of_week, schedule_group_id, is_recurring, origin, week_number,
             created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, $11, NOW(), NOW()) 
-          ON CONFLICT (user_id, local_id, visit_date, day_of_week) 
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, $11, $12, NOW(), NOW()) 
+          ON CONFLICT (user_id, local_id, visit_date, day_of_week, week_number) 
           DO UPDATE SET 
             start_time = EXCLUDED.start_time, 
             origin = EXCLUDED.origin,
@@ -99,7 +97,8 @@ export const bulkCreateRoutes = async (tasks) => {
           is_recurring ? null : (visit_date || null), 
           start_time, cleanOrder, warehouse_id || null,
           cleanDay, schedule_group_id || null, is_recurring || false,
-          origin || 'INDIVIDUAL'
+          origin || 'INDIVIDUAL',
+          safeWeek
         ]);
         
         if (result.rows.length > 0) results.push(result.rows[0]);
@@ -107,14 +106,11 @@ export const bulkCreateRoutes = async (tasks) => {
     }
 
     /* =========================================================
-       NOTIFICACIONES TIEMPO REAL SIN DUPLICADOS
-       ✅ FIX 1: Solo usuarios con ruta en el local HOY
-       ✅ FIX 2: ON CONFLICT DO NOTHING para evitar dobles inserts
+       NOTIFICACIONES EN TIEMPO REAL (AHORA CON COLUMNAS CORRECTAS)
     ========================================================= */
     if (results.length > 0) {
       const affectedLocalIds = [...new Set(results.map(r => r.local_id))];
 
-      // ✅ FIX: Filtrar por fecha actual para no notificar usuarios históricos
       const usersToNotifyRes = await client.query(`
         SELECT DISTINCT ur.user_id
         FROM public.user_routes ur
@@ -131,35 +127,36 @@ export const bulkCreateRoutes = async (tasks) => {
       const uniqueUsers = [...new Set(usersToNotifyRes.rows.map(r => r.user_id))];
 
       for (const notifyUserId of uniqueUsers) {
-        const refRoute =
-          results.find(r => r.user_id === notifyUserId) || results[0];
+        // Revisamos si ya se le notificó hoy para no spamear
+        const checkNotif = await client.query(`
+          SELECT id FROM public.notifications 
+          WHERE target_user_id = $1 
+            AND type = 'ROUTE_ASSIGNED' 
+            AND created_at::date = CURRENT_DATE
+          LIMIT 1
+        `, [notifyUserId]);
 
-        // ✅ FIX: ON CONFLICT DO NOTHING evita duplicados si se llama más de una vez
-        // IMPORTANTE: Requiere constraint única en la tabla:
-        // ALTER TABLE public.notifications
-        //   ADD CONSTRAINT uq_notif_user_type_related
-        //   UNIQUE (user_id, type, related_id);
-        await client.query(`
-          INSERT INTO public.notifications (
-            user_id,
-            company_id,
-            title,
-            message,
-            type,
-            related_id,
-            is_read,
-            created_at
-          )
-          VALUES ($1,$2,$3,$4,$5,$6,false,NOW())
-          ON CONFLICT (user_id, type, related_id) DO NOTHING
-        `, [
-          notifyUserId,
-          tasks[0].company_id,
-          'Nueva Planificación',
-          'Se han actualizado las rutas en locales donde tienes asignación.',
-          'ROUTE_ASSIGNED',
-          refRoute.id
-        ]);
+        if (checkNotif.rows.length === 0) {
+          await client.query(`
+            INSERT INTO public.notifications (
+              tenant_id,     
+              target_user_id,
+              scope,         
+              title,
+              message,
+              type,
+              is_read,
+              created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, false, NOW())
+          `, [
+            tasks[0].company_id,
+            notifyUserId,
+            'individual',
+            'Nueva Planificación',
+            'Se han actualizado las rutas en locales donde tienes asignación.',
+            'ROUTE_ASSIGNED'
+          ]);
+        }
       }
     }
 
@@ -177,14 +174,32 @@ export const bulkCreateRoutes = async (tasks) => {
 
 /* =========================================================
    OBTENER RUTAS POR USUARIO Y FECHA (Timeline)
+   🚩 FIX APLICADO: Calculador Inteligente de "Semana Retail"
 ========================================================= */
 export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
   try {
+    const d = new Date(date + "T12:00:00");
+    const isoDay = d.getDay() === 0 ? 7 : d.getDay(); 
+    
+    const currentMonday = new Date(d);
+    currentMonday.setDate(d.getDate() - isoDay + 1);
+    
+    const month = currentMonday.getMonth();
+    const year = currentMonday.getFullYear();
+    let firstMonday = new Date(year, month, 1, 12, 0, 0);
+    let fmIsoDay = firstMonday.getDay() === 0 ? 7 : firstMonday.getDay();
+    if (fmIsoDay !== 1) {
+      firstMonday.setDate(1 + (8 - fmIsoDay)); 
+    }
+    
+    const diffWeeks = Math.floor((currentMonday.getTime() - firstMonday.getTime()) / (1000 * 60 * 60 * 24 * 7));
+    const calculatedWeek = diffWeeks < 0 ? 4 : Math.min(diffWeeks + 1, 4);
+
     const query = `
       SELECT 
         ur.id, ur.visit_date, ur.start_time, ur.status, ur.order_sequence, 
         ur.day_of_week, ur.is_recurring, ur.lat_in, ur.lng_in, ur.check_in,
-        ur.origin,
+        ur.origin, ur.week_number,
         l.cadena, l.direccion, l.lat as local_lat, l.lng as local_lng,
         c.name as comuna_name,
         u.first_name, u.last_name
@@ -198,11 +213,16 @@ export const getRoutesByUserAndDate = async (company_id, user_id, date) => {
         AND (
           (ur.is_recurring = false AND ur.visit_date::date = $3::date)
           OR 
-          (ur.is_recurring = true AND ur.day_of_week = EXTRACT(DOW FROM $3::date)::integer)
+          (
+            ur.is_recurring = true 
+            AND ur.day_of_week = EXTRACT(DOW FROM $3::date)::integer
+            AND ur.week_number = $4::integer
+          )
         )
       ORDER BY ur.start_time ASC, ur.order_sequence ASC
     `;
-    const { rows } = await db.query(query, [company_id, user_id, date]);
+    
+    const { rows } = await db.query(query, [company_id, user_id, date, calculatedWeek]);
     return rows;
   } catch (error) {
     console.error("❌ Error en getRoutesByUserAndDate Service:", error.message);
@@ -242,15 +262,8 @@ export const updateRoute = async (id, data) => {
     );
     
     const tasks = [{
-      company_id,
-      user_id,
-      local_id,
-      visit_date: null,
-      start_time,
-      selectedDays,
-      schedule_group_id: groupId,
-      is_recurring: true,
-      origin: 'TURNO'
+      company_id, user_id, local_id, visit_date: null, start_time,
+      selectedDays, schedule_group_id: groupId, is_recurring: true, origin: 'TURNO'
     }];
     
     const updatedRows = await bulkCreateRoutes(tasks);
@@ -269,28 +282,17 @@ export const updateRoute = async (id, data) => {
 
 export const deleteRoute = async (company_id, route_id) => {
   const routeInfo = await db.query(
-    `SELECT schedule_group_id 
-     FROM public.user_routes 
-     WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
+    `SELECT schedule_group_id FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
     [route_id, company_id]
   );
 
   if (routeInfo.rows.length === 0) throw new Error("Ruta no encontrada");
-
   const groupId = routeInfo.rows[0]?.schedule_group_id;
 
   if (groupId) {
-    await db.query(
-      `DELETE FROM public.user_routes 
-       WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
-      [groupId, company_id]
-    );
+    await db.query(`DELETE FROM public.user_routes WHERE schedule_group_id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [groupId, company_id]);
   } else {
-    await db.query(
-      `DELETE FROM public.user_routes 
-       WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`,
-      [route_id, company_id]
-    );
+    await db.query(`DELETE FROM public.user_routes WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2)`, [route_id, company_id]);
   }
 
   return { message: "Planificación eliminada" };
@@ -306,9 +308,7 @@ export const resetRouteStatus = async (id, company_id) => {
       RETURNING *;
     `;
     const { rows } = await db.query(query, [id, company_id]);
-
     await db.query(`DELETE FROM public.visits WHERE route_id = $1`, [id]);
-
     return rows[0];
   } catch (error) {
     throw error;
