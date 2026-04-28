@@ -1,5 +1,18 @@
 import * as userService from "../users/users.service.js";
 import db from "../../database/db.js"; 
+import xlsx from "xlsx"; // 🚩 Asegúrate de instalarlo: npm install xlsx
+
+/* =========================================
+   🚩 FIX: FUNCIÓN PARA CONVERTIR FECHA EXCEL A JS
+   Excel guarda las fechas como números (serial), esta función
+   los convierte al formato AAAA-MM-DD que Postgres requiere.
+========================================= */
+const excelDateToJS = (serial) => {
+  if (!serial || isNaN(serial)) return serial; 
+  // Ajuste para el desajuste de días entre Excel (1900) y JS (1970)
+  const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
+  return date.toISOString().split('T')[0]; 
+};
 
 /* =========================================
    GET PUBLIC USER CREDENTIAL
@@ -283,5 +296,74 @@ export const updateUserContact = async (req, res) => {
         return res.status(400).json({ message: "El correo ya está siendo usado por otro usuario" });
     }
     res.status(500).json({ message: "Error interno al actualizar" });
+  }
+};
+
+/* =========================================
+   🚩 NUEVA MEJORA: BULK CREATE USERS (EXCEL)
+   Soporte para ROOT (selección de empresa) y ADMIN_CLIENTE.
+========================================= */
+export const bulkCreateUsers = async (req, res) => {
+  try {
+    const loggedUser = req.user;
+    
+    if (!req.files || !req.files.excel) {
+      return res.status(400).json({ message: "No se ha subido ningún archivo Excel" });
+    }
+
+    // El company_id viene del body (si es ROOT) o del token (si es ADMIN)
+    const targetCompanyId = loggedUser.role === "ROOT" ? req.body.company_id : loggedUser.company_id;
+
+    if (!targetCompanyId) {
+      return res.status(400).json({ message: "ID de empresa no proporcionado para la carga" });
+    }
+
+    const file = req.files.excel[0];
+    const workbook = xlsx.readFile(file.path);
+    const sheetName = workbook.SheetNames[0];
+    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    const results = { success: 0, errors: [] };
+
+    for (const row of data) {
+      try {
+        // Mapeo y limpieza de datos del Excel con conversión de fechas
+        const userData = {
+          company_id: targetCompanyId,
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email,
+          password: String(row.password || "Cultiva.2026"),
+          role: row.role?.toUpperCase() || "USUARIO",
+          rut: String(row.rut || ""),
+          position: row.position || "",
+          tipo_contrato: row.tipo_contrato || "Plazo Fijo",
+          
+          // 🚩 Conversión de fechas seriales de Excel a AAAA-MM-DD
+          fecha_inicio_contrato: excelDateToJS(row.fecha_inicio_contrato),
+          fecha_termino_contrato: excelDateToJS(row.fecha_termino_contrato),
+          
+          supervisor_nombre: row.supervisor_nombre || "",
+          supervisor_telefono: String(row.supervisor_telefono || "")
+        };
+
+        await userService.createUser(userData);
+        results.success++;
+      } catch (err) {
+        results.errors.push({ 
+          email: row.email || "Sin Email", 
+          error: err.message 
+        });
+      }
+    }
+
+    res.json({
+      message: `Proceso finalizado. ${results.success} usuarios creados.`,
+      errors: results.errors
+    });
+
+  } catch (error) {
+    console.error("❌ BULK CREATE ERROR:", error.message);
+    res.status(500).json({ message: "Error al procesar el archivo Excel" });
   }
 };

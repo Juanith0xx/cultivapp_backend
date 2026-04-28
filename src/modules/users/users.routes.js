@@ -10,7 +10,8 @@ import {
   getCompanyStats,
   resetPassword,
   getPublicUserCredential,
-  updateUserContact // 👈 1. Importamos la nueva función
+  updateUserContact,
+  bulkCreateUsers // 👈 1. Importamos la nueva función de carga masiva
 } from "./users.controller.js"
 
 // 🚩 IMPORTAMOS EL NUEVO CONTROLADOR DE SUPERVISORES
@@ -36,6 +37,11 @@ const userUploads = upload.fields([
   { name: "documento_achs", maxCount: 1 }
 ])
 
+// 🚩 Configuración para recibir el Excel de carga masiva
+const excelUpload = upload.fields([
+  { name: "excel", maxCount: 1 }
+])
+
 /* --- GESTIÓN DE USUARIOS --- */
 
 router.post(
@@ -45,6 +51,14 @@ router.post(
   createUser
 )
 
+// 🚩 2. NUEVA RUTA: Carga masiva de usuarios desde Excel
+router.post(
+  "/bulk",
+  roleGuard("ROOT", "ADMIN_CLIENTE"),
+  excelUpload,
+  bulkCreateUsers
+)
+
 router.put(
   "/:id", 
   roleGuard("ROOT", "ADMIN_CLIENTE"), 
@@ -52,7 +66,7 @@ router.put(
   updateUser
 )
 
-// 🚩 2. NUEVA RUTA: Actualizar contacto (Email/Teléfono)
+// 🚩 NUEVA RUTA: Actualizar contacto (Email/Teléfono)
 router.put(
   "/:id/update-contact",
   roleGuard("ROOT", "ADMIN_CLIENTE", "SUPERVISOR"), 
