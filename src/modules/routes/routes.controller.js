@@ -179,12 +179,10 @@ export const bulkCreate = async (req, res) => {
 
 /* =========================================================
    2. OPERACIONES INDIVIDUALES Y MONITOREO
-   🚩 FIX: Integración de 'selectedWeeks' desde el Frontend
 ========================================================= */
 
 export const createRoute = async (req, res) => {
   try {
-    // 🚩 Capturamos selectedWeeks (Ej: [1, 3] o [1, 2, 3, 4])
     const { user_id, local_id, start_time, visit_date, selectedDays, is_recurring, selectedWeeks } = req.body;
     const company_id = req.user.role === 'ROOT' ? (req.body.company_id || req.user.company_id) : req.user.company_id;
     
@@ -192,8 +190,6 @@ export const createRoute = async (req, res) => {
 
     if (is_recurring && selectedDays?.length > 0) {
       const groupId = crypto.randomUUID();
-      
-      // 🚩 Si el frontend mandó semanas específicas, las usamos. Si no, usamos las 4 por defecto.
       const weeksToApply = (selectedWeeks && Array.isArray(selectedWeeks) && selectedWeeks.length > 0) 
         ? selectedWeeks 
         : [1, 2, 3, 4];
@@ -206,7 +202,7 @@ export const createRoute = async (req, res) => {
             local_id, 
             start_time: validateTime(start_time), 
             day_of_week: parseInt(day), 
-            week_number: parseInt(week), // 🚩 Se asigna la semana seleccionada
+            week_number: parseInt(week), 
             schedule_group_id: groupId, 
             is_recurring: true, 
             origin: 'TURNO' 
@@ -287,9 +283,6 @@ export const getMyTasks = (req, res) => {
   ).then(tasks => res.json(tasks || [])).catch(err => res.status(400).json({ message: err.message }));
 };
 
-/* =========================================================
-   🚩 FIX: getAttendanceReport AHORA FILTRA POR SEMANA
-========================================================= */
 export const getAttendanceReport = async (req, res) => {
   try {
     const { company_id, role } = req.user;
@@ -312,8 +305,6 @@ export const getAttendanceReport = async (req, res) => {
       params.push(`%${search}%`);
     } else {
       const reportDate = validateDate(date) || new Date().toISOString().split('T')[0];
-      
-      // 🚩 CALCULADOR INTELIGENTE DE SEMANAS
       const d = new Date(reportDate + "T12:00:00");
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
       const currentMonday = new Date(d);
@@ -337,10 +328,9 @@ export const getAttendanceReport = async (req, res) => {
         )
       )`;
       params.push(reportDate);
-      params.push(calculatedWeek); // Añadimos la semana como parámetro
+      params.push(calculatedWeek);
     }
     
-    // Agregamos un ORDER BY para que la lista salga ordenada visualmente
     const result = await db.query(query + " ORDER BY r.start_time ASC, u.first_name ASC", params);
     res.json(result.rows);
   } catch (error) { 
@@ -349,16 +339,40 @@ export const getAttendanceReport = async (req, res) => {
   }
 };
 
+/* =========================================================
+   🚩 MEJORA: getLiveMonitoring AHORA TRAE EL COLOR CORPORATIVO
+========================================================= */
 export const getLiveMonitoring = async (req, res) => {
   try {
     const filterCompany = req.user.role === 'ROOT' ? (req.query.company_id || null) : req.user.company_id;
+    
+    // 🚩 CAMBIO: Agregamos JOIN con public.companies para obtener el campo 'color'
     const result = await db.query(`
-      SELECT u.id as user_id, u.first_name, u.last_name, r.id as route_id, r.status, r.lat_in, r.lng_in, r.check_in as active_since, l.cadena as local_nombre
-      FROM public.users u JOIN public.user_routes r ON u.id = r.user_id LEFT JOIN public.locales l ON r.local_id = l.id
-      WHERE r.status = 'IN_PROGRESS' ${filterCompany ? 'AND r.company_id = $1' : ''} ORDER BY r.check_in DESC;
+      SELECT 
+        u.id as user_id, 
+        u.first_name, 
+        u.last_name, 
+        r.id as route_id, 
+        r.status, 
+        r.lat_in, 
+        r.lng_in, 
+        r.check_in as active_since, 
+        l.cadena as local_nombre,
+        c.color as color  -- 🚩 Seleccionamos el color corporativo
+      FROM public.users u 
+      JOIN public.user_routes r ON u.id = r.user_id 
+      LEFT JOIN public.locales l ON r.local_id = l.id
+      LEFT JOIN public.companies c ON r.company_id = c.id -- 🚩 Join con empresas
+      WHERE r.status = 'IN_PROGRESS' 
+      ${filterCompany ? 'AND r.company_id = $1' : ''} 
+      ORDER BY r.check_in DESC;
     `, filterCompany ? [filterCompany] : []);
+
     res.json(result.rows);
-  } catch (error) { res.status(500).json({ message: "Error en monitoreo" }); }
+  } catch (error) { 
+    console.error("❌ Error en getLiveMonitoring:", error);
+    res.status(500).json({ message: "Error en monitoreo" }); 
+  }
 };
 
 /* =========================================================

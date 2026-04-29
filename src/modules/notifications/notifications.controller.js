@@ -87,21 +87,20 @@ export const sendBulkNotifications = async (req, res) => {
       }));
     }
 
-    // --- CASO 2: EMISIÓN POR PUNTO DE VENTA ---
+    // --- CASO 2: EMISIÓN POR PUNTO DE VENTA (Mejorado) ---
     else if (scope === 'local') {
       if (!localId) {
         return res.status(400).json({ success: false, message: 'Falta el ID del local' });
       }
 
-      const today = new Date().getDay();
-      const todayIso = new Date().toISOString().split('T')[0];
-
+      // 🚩 MEJORA FINAL: Buscamos a todos los usuarios vinculados a este local en user_routes.
+      // Se eliminan los filtros de fecha (todayIso) y día de la semana (today) para asegurar 
+      // que la instrucción llegue a toda la cartera de mercaderistas del punto de venta.
       const { data: routes, error: routeError } = await supabase
         .from('user_routes')
         .select('user_id')
         .eq('local_id', localId)
-        .is('deleted_at', null)
-        .or(`visit_date.eq.${todayIso},and(is_recurring.eq.true,day_of_week.eq.${today})`);
+        .is('deleted_at', null);
 
       if (routeError) throw routeError;
 
@@ -110,7 +109,7 @@ export const sendBulkNotifications = async (req, res) => {
       if (uniqueUserIds.length === 0) {
         return res.status(404).json({
           success: false,
-          message: 'No hay mercaderistas planificados en este local para hoy.'
+          message: 'No hay personal asignado a este Punto de Venta en el sistema.'
         });
       }
 
@@ -145,7 +144,7 @@ export const sendBulkNotifications = async (req, res) => {
       }));
     }
 
-    // --- CASO 4: ZONA (pendiente de implementar filtro por zona) ---
+    // --- CASO 4: ZONA ---
     else if (scope === 'ZONA') {
       return res.status(400).json({ success: false, message: 'Envío por zona aún no implementado' });
     }
