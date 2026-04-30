@@ -339,35 +339,22 @@ export const getAttendanceReport = async (req, res) => {
   }
 };
 
-/* =========================================================
-   🚩 MEJORA: getLiveMonitoring AHORA TRAE EL COLOR CORPORATIVO
-========================================================= */
 export const getLiveMonitoring = async (req, res) => {
   try {
     const filterCompany = req.user.role === 'ROOT' ? (req.query.company_id || null) : req.user.company_id;
-    
-    // 🚩 CAMBIO: Agregamos JOIN con public.companies para obtener el campo 'color'
     const result = await db.query(`
       SELECT 
-        u.id as user_id, 
-        u.first_name, 
-        u.last_name, 
-        r.id as route_id, 
-        r.status, 
-        r.lat_in, 
-        r.lng_in, 
-        r.check_in as active_since, 
-        l.cadena as local_nombre,
-        c.color as color  -- 🚩 Seleccionamos el color corporativo
+        u.id as user_id, u.first_name, u.last_name, 
+        r.id as route_id, r.status, r.lat_in, r.lng_in, r.check_in as active_since, 
+        l.cadena as local_nombre, c.color as color
       FROM public.users u 
       JOIN public.user_routes r ON u.id = r.user_id 
       LEFT JOIN public.locales l ON r.local_id = l.id
-      LEFT JOIN public.companies c ON r.company_id = c.id -- 🚩 Join con empresas
+      LEFT JOIN public.companies c ON r.company_id = c.id
       WHERE r.status = 'IN_PROGRESS' 
       ${filterCompany ? 'AND r.company_id = $1' : ''} 
       ORDER BY r.check_in DESC;
     `, filterCompany ? [filterCompany] : []);
-
     res.json(result.rows);
   } catch (error) { 
     console.error("❌ Error en getLiveMonitoring:", error);
@@ -376,11 +363,68 @@ export const getLiveMonitoring = async (req, res) => {
 };
 
 /* =========================================================
-   3. MANTENIMIENTO
+   3. MANTENIMIENTO ACTUALIZADO CON JOIN DE TURNOS
 ========================================================= */
 
-export const getRoutesByUser = (req, res) => routeService.getRoutesByUser(req.user.role === 'ROOT' ? null : req.user.company_id, req.params.userId).then(r => res.json(r));
-export const getRoutes = (req, res) => routeService.getRoutesByCompany(req.user.role === 'ROOT' ? req.query.company_id : req.user.company_id).then(r => res.json(r));
+// 🚩 MEJORA: getRoutesByCompany ahora trae nombre_turno, entrada y salida
+export const getRoutes = async (req, res) => {
+  try {
+    const targetCompanyId = req.user.role === 'ROOT' ? req.query.company_id : req.user.company_id;
+    
+    const query = `
+      SELECT 
+        r.*, 
+        u.first_name, u.last_name, u.rut,
+        l.cadena, l.direccion, l.codigo_local,
+        t.nombre_turno, t.entrada, t.salida
+      FROM public.user_routes r
+      LEFT JOIN public.users u ON r.user_id = u.id
+      LEFT JOIN public.locales l ON r.local_id = l.id
+      LEFT JOIN public.turnos_config t ON 
+        r.company_id = t.company_id AND 
+        r.day_of_week = t.day_of_week AND 
+        r.start_time = t.entrada
+      WHERE r.company_id = $1 AND r.deleted_at IS NULL
+      ORDER BY r.start_time ASC;
+    `;
+    
+    const result = await db.query(query, [targetCompanyId]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// 🚩 MEJORA: getRoutesByUser ahora trae nombre_turno, entrada y salida
+export const getRoutesByUser = async (req, res) => {
+  try {
+    const targetCompanyId = req.user.role === 'ROOT' ? null : req.user.company_id;
+    const userId = req.params.userId;
+
+    const query = `
+      SELECT 
+        r.*, 
+        l.cadena, l.direccion, l.codigo_local,
+        t.nombre_turno, t.entrada, t.salida
+      FROM public.user_routes r
+      LEFT JOIN public.locales l ON r.local_id = l.id
+      LEFT JOIN public.turnos_config t ON 
+        r.company_id = t.company_id AND 
+        r.day_of_week = t.day_of_week AND 
+        r.start_time = t.entrada
+      WHERE r.user_id = $1 
+      ${targetCompanyId ? 'AND r.company_id = $2' : ''} 
+      AND r.deleted_at IS NULL
+    `;
+    
+    const params = targetCompanyId ? [userId, targetCompanyId] : [userId];
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export const updateRoute = (req, res) => routeService.updateRoute(req.params.id, req.body).then(r => res.json(r));
 export const deleteRoute = (req, res) => routeService.deleteRoute(req.user.company_id, req.params.id).then(r => res.json(r));
 export const resetCheckIn = (req, res) => routeService.resetRouteStatus(req.params.id, req.user.company_id).then(r => res.json(r));
