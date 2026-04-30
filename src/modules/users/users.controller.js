@@ -16,7 +16,7 @@ const excelDateToJS = (serial) => {
 
 /* =========================================
    GET PUBLIC USER CREDENTIAL
-   🚩 MEJORA: Consulta con JOIN y nuevas fechas de vigencia
+   🚩 MEJORA: Se añade columna 'phone' a la consulta
 ========================================= */
 export const getPublicUserCredential = async (req, res) => {
   try {
@@ -25,7 +25,7 @@ export const getPublicUserCredential = async (req, res) => {
 
     const query = `
       SELECT 
-        u.id, u.first_name, u.last_name, u.position, u.foto_url, u.rut, 
+        u.id, u.first_name, u.last_name, u.position, u.foto_url, u.rut, u.phone,
         u.fecha_inicio_contrato, u.fecha_termino_contrato, 
         u.is_active, u.achs_url, u.tipo_contrato,
         u.supervisor_nombre, u.supervisor_telefono,
@@ -50,7 +50,7 @@ export const getPublicUserCredential = async (req, res) => {
 
 /* =========================================
    CREATE USER
-   🚩 MEJORA: Soporte para rango de fechas de contrato
+   🚩 MEJORA: Soporte para campo 'phone'
 ========================================= */
 export const createUser = async (req, res) => {
   try {
@@ -73,7 +73,8 @@ export const createUser = async (req, res) => {
       }
     }
 
-    // Normalizar fechas para Postgres
+    // Normalizar datos para Postgres
+    payload.phone = payload.phone || null;
     payload.fecha_inicio_contrato = payload.fecha_inicio_contrato || null;
     payload.fecha_termino_contrato = payload.fecha_termino_contrato || null;
 
@@ -86,7 +87,7 @@ export const createUser = async (req, res) => {
 
 /* =========================================
    UPDATE USER
-   🚩 MEJORA: Consulta directa para evitar "updateUser is not a function"
+   🚩 MEJORA: Se añade 'phone' ($12) a la consulta SQL
 ========================================= */
 export const updateUser = async (req, res) => {
   try {
@@ -120,9 +121,10 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    // Normalización de fechas (Evita error 400 por strings vacíos en tipos DATE)
+    // Normalización de campos
     const f_inicio = payload.fecha_inicio_contrato && payload.fecha_inicio_contrato !== "" ? payload.fecha_inicio_contrato : null;
     const f_termino = payload.fecha_termino_contrato && payload.fecha_termino_contrato !== "" ? payload.fecha_termino_contrato : null;
+    const phone_val = payload.phone || null;
 
     const updateQuery = `
       UPDATE public.users 
@@ -131,9 +133,9 @@ export const updateUser = async (req, res) => {
         rut = $5, position = $6, tipo_contrato = $7, 
         fecha_inicio_contrato = $8, fecha_termino_contrato = $9, 
         supervisor_nombre = $10, supervisor_telefono = $11, 
-        foto_url = $12, achs_url = $13, updated_at = NOW()
-      WHERE id = $14
-      RETURNING id, first_name, last_name, email;
+        phone = $12, foto_url = $13, achs_url = $14, updated_at = NOW()
+      WHERE id = $15
+      RETURNING id, first_name, last_name, email, phone;
     `;
 
     const values = [
@@ -141,7 +143,10 @@ export const updateUser = async (req, res) => {
       payload.rut, payload.position, payload.tipo_contrato,
       f_inicio, f_termino,
       payload.supervisor_nombre, payload.supervisor_telefono,
-      foto_final, achs_final, id
+      phone_val, // $12
+      foto_final, // $13
+      achs_final, // $14
+      id // $15
     ];
 
     const result = await db.query(updateQuery, values);
@@ -301,7 +306,7 @@ export const updateUserContact = async (req, res) => {
 
 /* =========================================
    🚩 NUEVA MEJORA: BULK CREATE USERS (EXCEL)
-   Soporte para ROOT (selección de empresa) y ADMIN_CLIENTE.
+   Soporte para campo 'phone' desde Excel.
 ========================================= */
 export const bulkCreateUsers = async (req, res) => {
   try {
@@ -311,7 +316,6 @@ export const bulkCreateUsers = async (req, res) => {
       return res.status(400).json({ message: "No se ha subido ningún archivo Excel" });
     }
 
-    // El company_id viene del body (si es ROOT) o del token (si es ADMIN)
     const targetCompanyId = loggedUser.role === "ROOT" ? req.body.company_id : loggedUser.company_id;
 
     if (!targetCompanyId) {
@@ -327,22 +331,19 @@ export const bulkCreateUsers = async (req, res) => {
 
     for (const row of data) {
       try {
-        // Mapeo y limpieza de datos del Excel con conversión de fechas
         const userData = {
           company_id: targetCompanyId,
           first_name: row.first_name,
           last_name: row.last_name,
           email: row.email,
+          phone: row.phone ? String(row.phone) : null, // 🚩 Mapeo de columna 'phone'
           password: String(row.password || "Cultiva.2026"),
           role: row.role?.toUpperCase() || "USUARIO",
           rut: String(row.rut || ""),
           position: row.position || "",
           tipo_contrato: row.tipo_contrato || "Plazo Fijo",
-          
-          // 🚩 Conversión de fechas seriales de Excel a AAAA-MM-DD
           fecha_inicio_contrato: excelDateToJS(row.fecha_inicio_contrato),
           fecha_termino_contrato: excelDateToJS(row.fecha_termino_contrato),
-          
           supervisor_nombre: row.supervisor_nombre || "",
           supervisor_telefono: String(row.supervisor_telefono || "")
         };
